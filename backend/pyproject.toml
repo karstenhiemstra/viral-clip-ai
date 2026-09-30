@@ -2,7 +2,6 @@
 name = "viralclip-backend"
 version = "0.1.0"
 description = "ViralClip AI - finds, scores and renders viral short-form clips from long YouTube videos"
-readme = "../README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
