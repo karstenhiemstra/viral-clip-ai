@@ -1,0 +1,48 @@
+[project]
+name = "viralclip-backend"
+version = "0.1.0"
+description = "ViralClip AI - finds, scores and renders viral short-form clips from long YouTube videos"
+readme = "../README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "sqlalchemy>=2.0.30",
+    "alembic>=1.13",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "numpy>=1.26",
+    # OpenCV 4.x still ships the Haar cascades we use as zero-download face detector fallback.
+    "opencv-python-headless>=4.9,<5",
+    "cryptography>=42",
+    "openai>=1.40",
+    "anthropic>=0.40",
+    "psycopg[binary]>=3.1",
+]
+
+[project.optional-dependencies]
+s3 = ["boto3>=1.34"]
+local-whisper = ["faster-whisper>=1.0"]
+dev = ["pytest>=8", "respx>=0.21", "ruff>=0.5"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501", "B008"]
