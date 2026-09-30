@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
@@ -28,6 +28,9 @@ def record_usage(
 ) -> None:
     try:
         with SessionLocal() as s:
+            if s.get_bind().dialect.name == "sqlite":
+                # Bookkeeping must never stall the pipeline behind another writer's lock.
+                s.execute(text("PRAGMA busy_timeout=3000"))
             s.add(
                 ApiUsage(
                     day=date.today().isoformat(),

@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import shutil
 import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -29,6 +28,23 @@ class VideoCreate(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     force: bool = False
+
+
+class ImportLinkRequest(BaseModel):
+    url: str = Field(..., min_length=8, max_length=2000)
+    title: str | None = Field(None, max_length=500)
+    youtube_url: str | None = Field(None, max_length=500)
+
+
+def _queue_import(db: Session, video: Video, url: str) -> None:
+    from app.services.remote_media import RemoteMediaError, _check_host, normalize_share_link
+
+    try:
+        _check_host(normalize_share_link(url))
+    except RemoteMediaError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    queue.enqueue(db, JobType.IMPORT_MEDIA, video_id=video.id, priority=92, payload={"url": url},
+                  title=f"Bron importeren: {video.title}"[:300])
 
 
 def _job_state(db: Session, video_ids: list[int]) -> dict[int, dict]:
@@ -103,9 +119,18 @@ def _save_upload(upload: UploadFile, allowed: set[str]) -> Path:
     ext = Path(upload.filename or "").suffix.lower()
     if ext not in allowed:
         raise HTTPException(status_code=400, detail=f"Bestandstype {ext or '?'} niet ondersteund ({', '.join(sorted(allowed))})")
-    dst = get_settings().tmp_dir / f"upload-{uuid.uuid4().hex}{ext}"
+    settings = get_settings()
+    limit = int(settings.max_upload_gb * 1024**3)
+    dst = settings.tmp_dir / f"upload-{uuid.uuid4().hex}{ext}"
+    written = 0
     with dst.open("wb") as out:
-        shutil.copyfileobj(upload.file, out, length=4 * 1024 * 1024)
+        while chunk := upload.file.read(4 * 1024 * 1024):
+            written += len(chunk)
+            if written > limit:
+                out.close()
+                dst.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail=f"Bestand is groter dan {settings.max_upload_gb:g} GB")
+            out.write(chunk)
     return dst
 
 
@@ -138,6 +163,33 @@ def upload_video(
         if path.exists():
             path.unlink()
     return video_out(video)
+
+
+@router.post("/import-url", status_code=201)
+def import_from_link(body: ImportLinkRequest, db: Session = Depends(get_db)):
+    """New video from a share link (Google Drive / Dropbox / direct file) of the rights holder."""
+    video: Video | None = None
+    if body.youtube_url:
+        try:
+            video = add_video_by_url(db, YouTubeClient(get_secret(db, "youtube_api_key")), body.youtube_url,
+                                     load_settings(db), analyze=False)
+        except (ValueError, YouTubeError) as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+    if video is None:
+        video = Video(title=(body.title or "Geïmporteerde video")[:500], source="upload", status=VideoStatus.DISCOVERED)
+        db.add(video)
+        db.commit()
+    _queue_import(db, video, body.url)
+    return video_out(video)
+
+
+@router.post("/{video_id}/import-url")
+def import_media_link(video_id: int, body: ImportLinkRequest, db: Session = Depends(get_db)):
+    v = db.get(Video, video_id)
+    if v is None:
+        raise HTTPException(status_code=404, detail="Video niet gevonden")
+    _queue_import(db, v, body.url)
+    return video_out(v)
 
 
 @router.get("/{video_id}")

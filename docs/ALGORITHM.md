@@ -9,8 +9,8 @@ Dit document beschrijft hoe ViralClip AI van een lange video naar een Top 5 komt
 | Stage | Wat | Code |
 |---|---|---|
 | 0 | Voorbereiding: woorden → zinnen, audio-luidheid, camerawissels, comment-hotspots | `ai/transcript.py`, `video/audio_features.py`, `video/scenes.py`, `services/youtube.py` |
-| 1 | Kandidaten genereren (recall): signaal-vensters + LLM pass 1 | `ai/candidates.py` |
-| 2–7 | Content-, hook-, context-, retentie-, emotie- en engagement-analyse (LLM pass 2 of heuristiek) | `ai/evaluator.py`, `ai/prompts.py`, `ai/signals.py` |
+| 1 | **Pass 1** — kandidaten genereren (recall): signaal-vensters + goedkoop model over het hele transcript; **Pass 2** — lokaal samenvoegen + shortlist | `ai/candidates.py` |
+| 2–7 | **Pass 3** — content-, hook-, context-, retentie-, emotie- en engagement-analyse van alleen de shortlist (slim model of heuristiek) | `ai/evaluator.py`, `ai/prompts.py`, `ai/signals.py` |
 | 10 | Clip-optimalisatie: exacte, hook-first grenzen | `ai/boundaries.py` |
 | 9 | Viral Score (funnel) + persoonlijke bijsturing | `ai/scoring.py`, `services/learning.py` |
 | 5* | Optionele vision-check van alleen de beste kandidaten | `ai/vision.py` |
@@ -28,13 +28,13 @@ Dit document beschrijft hoe ViralClip AI van een lange video naar een Top 5 komt
 Twee onafhankelijke generatoren, samengevoegd op tijd-overlap (IoU ≥ 0,5):
 
 1. **Signaal-vensters.** Voor elke zin als start wordt de beste eindzin gezocht binnen 0,8×min … 1,3×max duur. Score = audio-pieken + hook-woorden (NL/EN-lexicon: intensiteit, verrassing, humor, controverse, verhaal, teaser, inzet) + comment-hotspots − stiltes − intro/outro. Non-maximum suppression houdt diverse vensters over. Dit vangt momenten die een LLM niet kan "horen".
-2. **LLM pass 1** (snel/goedkoop model) leest het transcript in blokken van ~6 min met 30 s overlap, krijgt de hotspots en audio-pieken als hints, en noemt per blok 3–12 momenten als **zin-ID's** (start, eind, hook-zin), met categorie en korte reden.
+2. **Pass 1 — LLM** (snel/goedkoop model, standaard `gpt-5-mini` / `claude-haiku-4-5`) leest het transcript in blokken van ~6 min met 30 s overlap, krijgt de hotspots en audio-pieken als hints, en noemt per blok 3–12 momenten als **zin-ID's** (start, eind, hook-zin), met categorie en korte reden.
 
-De samengevoegde lijst wordt gesorteerd op prioriteit (LLM-inschatting × signaal) en de top `candidate_count` (standaard 30) gaat door.
+**Pass 2 (lokaal, gratis):** de samengevoegde lijst wordt ontdubbeld, gesorteerd op prioriteit (LLM-inschatting × signaal) en de top `candidate_count` (standaard 30) gaat door.
 
-## Stages 2–7 — Beoordelen (precisie)
+## Stages 2–7 — Pass 3: beoordelen (precisie)
 
-**LLM pass 2** (slim model) beoordeelt kandidaten in batches van 6 — batching laat het model vergelijken, wat de kalibratie verbetert, en deelt de gecachete rubric. Per kandidaat ziet het model de exacte zinnen + 3 zinnen context ervoor/erna. Het vult in:
+**Pass 3** (slim model, standaard `gpt-5` met reasoning *low*; kwaliteit *Beste*: *medium*; Claude: `claude-sonnet-5-5` / `claude-opus-5-5`) beoordeelt kandidaten in batches van 6 — batching laat het model vergelijken, wat de kalibratie verbetert, en deelt de gecachete rubric. Per kandidaat ziet het model de exacte zinnen + 3 zinnen context ervoor/erna. Het vult in:
 
 - `first_seconds` — wat een kijker letterlijk hoort in de eerste ~2 s (**hook-analyse**),
 - `viewer_reaction` — de eerlijke reactie van een willekeurige scroller (**het TikTok-kijkersperspectief**),
@@ -100,12 +100,15 @@ Vanaf 12 clips wordt een ridge-regressie getraind (automatisch elke 10 nieuwe be
 
 ## Kosten per stap
 
-| Stap | Kosten |
-|---|---|
-| Stage 0 + signaal-vensters + boundaries + dedupe (TF-IDF) + rendering | gratis (lokaal) |
-| LLM pass 1 | 1 goedkoop model over het hele transcript |
-| LLM pass 2 | duur model, alleen over ~30 kandidaten |
-| Vision | alleen top N, standaard uit |
+| Stap | Kosten | Gemeten tokens |
+|---|---|---|
+| Stage 0 + signaal-vensters + Pass 2 + boundaries + dedupe (TF-IDF) + rendering | gratis (lokaal) | — |
+| Pass 1 | goedkoop model over het hele transcript | ~460 in + ~170 uit per videominuut |
+| Pass 3 | slim model, alleen over ~30 kandidaten (onafhankelijk van de videolengte) | ~350 in + ~150 uit per kandidaat |
+| Transcriptie | Whisper API $0,006/min, of lokaal/SRT gratis | — |
+| Vision | alleen top N, standaard uit | — |
+
+Plus verborgen reasoning-tokens (als output gefactureerd). De schatter staat in `backend/app/ai/costs.py`; de tabel voor jouw instellingen staat in Settings → AI & modellen. Een fatale AI-fout (ongeldige key, tegoed op, API onbereikbaar) stopt de AI-passes direct — geen tientallen mislukte aanroepen — en de analyse gaat heuristisch verder, met een melding op het dashboard.
 
 ## Zelf verbeteren
 

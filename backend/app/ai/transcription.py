@@ -38,6 +38,18 @@ class Transcriber(Protocol):
     def transcribe(self, media: Path, language: str | None, duration: float) -> tuple[list[Word], str | None]: ...
 
 
+def _friendly_openai_error(e: Exception) -> str:
+    import openai
+
+    text = str(e)
+    if isinstance(e, openai.AuthenticationError):
+        return "Whisper: ongeldige OPENAI_API_KEY. Maak een nieuwe key op platform.openai.com → API keys."
+    if isinstance(e, openai.RateLimitError) and ("insufficient_quota" in text or "exceeded your current quota" in text.lower()):
+        return ("Whisper: je OpenAI-tegoed is op. Voeg tegoed toe op platform.openai.com → Settings → Billing, "
+                "of upload ondertitels (.srt) zodat transcriptie niet nodig is.")
+    return f"Whisper API fout: {text}"
+
+
 class OpenAITranscriber:
     name = "openai_whisper"
 
@@ -69,7 +81,7 @@ class OpenAITranscriber:
                     try:
                         resp = self.client.audio.transcriptions.create(**kwargs)
                     except Exception as e:  # SDK raises typed errors; surface a readable message
-                        raise TranscriptionError(f"Whisper API fout: {e}") from e
+                        raise TranscriptionError(_friendly_openai_error(e)) from e
                 record_usage(
                     "openai", "transcription", units=chunk_len / 60, cost_usd=chunk_len / 60 * WHISPER_PRICE_PER_MIN
                 )

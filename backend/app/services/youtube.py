@@ -230,9 +230,17 @@ def comment_hotspots(
 
 
 class YouTubeClient:
-    def __init__(self, api_key: str | None, http: httpx.Client | None = None):
+    def __init__(self, api_key: str | None, http: httpx.Client | None = None, api_base: str | None = None,
+                 web_base: str | None = None):
+        from app.config import get_settings
+
+        s = get_settings()
         self.api_key = api_key or ""
         self.http = http or httpx.Client(timeout=20.0, headers={"User-Agent": "ViralClipAI/0.1"})
+        self.api_base = (api_base or s.youtube_api_base).rstrip("/")
+        web = (web_base or s.youtube_web_base).rstrip("/")
+        self.rss_url = f"{web}/feeds/videos.xml"
+        self.oembed_url = f"{web}/oembed"
 
     @property
     def has_key(self) -> bool:
@@ -244,7 +252,7 @@ class YouTubeClient:
         params = {k: v for k, v in params.items() if v is not None}
         params["key"] = self.api_key
         try:
-            resp = self.http.get(f"{API_BASE}/{endpoint}", params=params)
+            resp = self.http.get(f"{self.api_base}/{endpoint}", params=params)
         except httpx.HTTPError as e:
             raise YouTubeError(f"YouTube API niet bereikbaar: {e}") from e
         record_usage("youtube", endpoint, units=cost)
@@ -261,6 +269,22 @@ class YouTubeClient:
             raise QuotaExceeded("YouTube API quota is op voor vandaag (reset om middernacht Pacific Time)")
         if resp.status_code == 403 and reason == "commentsDisabled":
             return {"items": []}
+        if resp.status_code == 404 and reason in ("playlistNotFound", "videoNotFound", "channelNotFound"):
+            return {"items": []}
+        friendly = {
+            "keyInvalid": "De YouTube API key is ongeldig. Kopieer hem opnieuw uit Google Cloud Console (APIs & Services > Credentials).",
+            "badRequest": "De YouTube API key is ongeldig of verkeerd gekopieerd.",
+            "accessNotConfigured": "De YouTube Data API v3 staat nog niet aan in je Google Cloud-project. "
+            "Ga naar APIs & Services > Library > 'YouTube Data API v3' en klik op Enable.",
+            "SERVICE_DISABLED": "De YouTube Data API v3 staat nog niet aan in je Google Cloud-project. "
+            "Ga naar APIs & Services > Library > 'YouTube Data API v3' en klik op Enable.",
+            "ipRefererBlocked": "Je API key is beperkt tot bepaalde websites/IP-adressen. Haal die beperking weg "
+            "(Credentials > je key > Application restrictions: None).",
+            "API_KEY_HTTP_REFERRER_BLOCKED": "Je API key is beperkt tot bepaalde websites. Zet Application restrictions op None.",
+            "forbidden": "Geen toegang tot de YouTube API met deze key.",
+        }
+        if reason in friendly or "API key not valid" in message:
+            raise YouTubeError(friendly.get(reason) or friendly["keyInvalid"])
         raise YouTubeError(f"YouTube API fout {resp.status_code} ({reason}): {message}")
 
     # channels ------------------------------------------------------------------
@@ -355,28 +379,43 @@ class YouTubeClient:
 
     # videos --------------------------------------------------------------------
 
-    def list_upload_ids(self, uploads_playlist_id: str, max_items: int = 50) -> list[str]:
-        ids: list[str] = []
+    def list_uploads(
+        self, uploads_playlist_id: str, max_items: int = 50, published_after: datetime | None = None
+    ) -> list[tuple[str, datetime | None]]:
+        """Newest-first (video id, published at) from a channel's uploads playlist. 1 unit per 50 items.
+
+        Stops paging as soon as the videos get older than ``published_after`` (saves quota)."""
+        out: list[tuple[str, datetime | None]] = []
         page_token = None
-        while len(ids) < max_items:
+        while len(out) < max_items:
             data = self._get(
                 "playlistItems",
                 {
                     "part": "contentDetails",
                     "playlistId": uploads_playlist_id,
-                    "maxResults": min(50, max_items - len(ids)),
+                    "maxResults": min(50, max_items - len(out)),
                     "pageToken": page_token,
                 },
                 cost=1,
             )
+            reached_cutoff = False
             for it in data.get("items", []):
-                vid = it.get("contentDetails", {}).get("videoId")
-                if vid:
-                    ids.append(vid)
+                cd = it.get("contentDetails", {})
+                vid = cd.get("videoId")
+                if not vid:
+                    continue
+                published = parse_datetime(cd.get("videoPublishedAt"))
+                if published_after is not None and published is not None and published < published_after:
+                    reached_cutoff = True
+                    continue
+                out.append((vid, published))
             page_token = data.get("nextPageToken")
-            if not page_token:
+            if not page_token or reached_cutoff:
                 break
-        return ids
+        return out[:max_items]
+
+    def list_upload_ids(self, uploads_playlist_id: str, max_items: int = 50) -> list[str]:
+        return [vid for vid, _ in self.list_uploads(uploads_playlist_id, max_items=max_items)]
 
     def get_videos(self, ids: list[str]) -> list[VideoInfo]:
         out: list[VideoInfo] = []
@@ -446,7 +485,7 @@ class YouTubeClient:
     def fetch_rss(self, channel_id: str) -> list[VideoInfo]:
         """Latest ~15 uploads of a channel. Free (no quota) and needs no API key."""
         try:
-            resp = self.http.get(RSS_URL, params={"channel_id": channel_id})
+            resp = self.http.get(self.rss_url, params={"channel_id": channel_id})
         except httpx.HTTPError as e:
             raise YouTubeError(f"RSS feed niet bereikbaar: {e}") from e
         if resp.status_code != 200:
@@ -456,7 +495,7 @@ class YouTubeClient:
     def fetch_oembed(self, video_id: str) -> VideoInfo | None:
         try:
             resp = self.http.get(
-                OEMBED_URL, params={"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"}
+                self.oembed_url, params={"url": f"https://www.youtube.com/watch?v={video_id}", "format": "json"}
             )
         except httpx.HTTPError:
             return None

@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Link2, Upload } from "lucide-react";
+import { CloudDownload, FileText, Link2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { errorText, useToast } from "@/components/toast";
@@ -46,6 +46,47 @@ export function UploadMediaButton({ video, onDone, size = "sm" }: { video: Video
   );
 }
 
+const LINK_HINT =
+  "Deel-link van de rechthebbende: Google Drive (\"Iedereen met de link\"), Dropbox, OneDrive of een directe link naar een .mp4. YouTube-links worden bewust niet gedownload.";
+
+export function ImportLinkButton({ video, onDone, size = "sm" }: { video: Video; onDone?: () => void; size?: "sm" | "md" }) {
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      await api(`/api/videos/${video.id}/import-url`, { method: "POST", json: { url } });
+      toast("Download gestart — daarna begint de analyse automatisch (zie Wachtrij)");
+      setUrl("");
+      setOpen(false);
+      onDone?.();
+    } catch (err) {
+      toast(errorText(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <Button size={size} icon={<CloudDownload className="size-3.5" />} onClick={() => setOpen(true)}>Bron via link</Button>
+      <Modal open={open} onClose={() => setOpen(false)} title="Bronvideo importeren via link">
+        <form onSubmit={submit} className="space-y-4">
+          <Field label="Deel-link" hint={LINK_HINT}>
+            <Input autoFocus required type="url" placeholder="https://drive.google.com/file/d/…" value={url} onChange={(e) => setUrl(e.target.value)} />
+          </Field>
+          <div className="flex justify-end gap-2">
+            <Button onClick={() => setOpen(false)}>Annuleren</Button>
+            <Button type="submit" variant="fire" loading={busy}>Importeren & analyseren</Button>
+          </div>
+        </form>
+      </Modal>
+    </>
+  );
+}
+
 export function UploadTranscriptButton({ video, onDone }: { video: Video; onDone?: () => void }) {
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);
@@ -78,7 +119,8 @@ export function UploadTranscriptButton({ video, onDone }: { video: Video; onDone
 
 export function AddVideoModal({ open, onClose, onAdded }: { open: boolean; onClose: () => void; onAdded: (v: Video) => void }) {
   const toast = useToast();
-  const [tab, setTab] = useState<"url" | "upload">("url");
+  const [tab, setTab] = useState<"url" | "upload" | "link">("url");
+  const [shareUrl, setShareUrl] = useState("");
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
@@ -125,23 +167,65 @@ export function AddVideoModal({ open, onClose, onAdded }: { open: boolean; onClo
     }
   }
 
+  async function submitLink(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try {
+      const v = await api<Video>("/api/videos/import-url", {
+        method: "POST",
+        json: { url: shareUrl, title: title || null, youtube_url: linkUrl || null },
+      });
+      toast("Download gestart — daarna begint de analyse automatisch");
+      setShareUrl("");
+      setTitle("");
+      setLinkUrl("");
+      onAdded(v);
+      onClose();
+    } catch (err) {
+      toast(errorText(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const TABS = [
+    { key: "url" as const, label: "YouTube-URL", icon: <Link2 className="size-3.5" /> },
+    { key: "upload" as const, label: "Bestand", icon: <Upload className="size-3.5" /> },
+    { key: "link" as const, label: "Deel-link", icon: <CloudDownload className="size-3.5" /> },
+  ];
+
   return (
     <Modal open={open} onClose={onClose} title="Video toevoegen">
-      <div className="mb-4 grid grid-cols-2 gap-1 rounded-lg border border-line bg-panel-2 p-1">
-        {(["url", "upload"] as const).map((t) => (
+      <div className="mb-4 grid grid-cols-3 gap-1 rounded-lg border border-line bg-panel-2 p-1">
+        {TABS.map((t) => (
           <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={cx("flex h-8 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition", tab === t ? "bg-panel-3 text-ink" : "text-muted hover:text-ink")}
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={cx("flex h-8 items-center justify-center gap-1.5 rounded-md text-xs font-medium transition", tab === t.key ? "bg-panel-3 text-ink" : "text-muted hover:text-ink")}
           >
-            {t === "url" ? <Link2 className="size-3.5" /> : <Upload className="size-3.5" />}
-            {t === "url" ? "YouTube-URL" : "Bestand uploaden"}
+            {t.icon}
+            {t.label}
           </button>
         ))}
       </div>
-      {tab === "url" ? (
+      {tab === "link" ? (
+        <form onSubmit={submitLink} className="space-y-4">
+          <Field label="Deel-link naar het videobestand" hint={LINK_HINT}>
+            <Input autoFocus required type="url" placeholder="https://drive.google.com/file/d/…" value={shareUrl} onChange={(e) => setShareUrl(e.target.value)} />
+          </Field>
+          <Field label="Titel (optioneel)">
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Geïmporteerde video" />
+          </Field>
+          <Field label="Bijbehorende YouTube-URL (optioneel)" hint="Koppelt metadata, creator en comment-hotspots.">
+            <Input value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=…" />
+          </Field>
+          <div className="flex justify-end">
+            <Button type="submit" variant="fire" loading={busy}>Importeren & analyseren</Button>
+          </div>
+        </form>
+      ) : tab === "url" ? (
         <form onSubmit={submitUrl} className="space-y-4">
-          <Field label="YouTube-URL" hint="Metadata en comments komen via de officiële YouTube API. Voor analyse is daarna het bronbestand of een transcript nodig.">
+          <Field label="YouTube-URL" hint="Metadata en comments komen via de officiële YouTube API. Voor de analyse lever je daarna het bronbestand, een deel-link of ondertitels (.srt) aan.">
             <Input autoFocus required placeholder="https://www.youtube.com/watch?v=…" value={url} onChange={(e) => setUrl(e.target.value)} />
           </Field>
           <div className="flex justify-end">

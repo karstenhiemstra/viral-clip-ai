@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Flame, Hourglass, KeyRound, ListOrdered, Sparkles, TriangleAlert, Upload, Users } from "lucide-react";
+import { ArrowRight, CheckCircle2, Flame, Hourglass, ListOrdered, Sparkles, TriangleAlert, Users } from "lucide-react";
 import Link from "next/link";
 
 import { ClipCard, ScoreBadge } from "@/components/clips";
@@ -22,33 +22,38 @@ function Stat({ label, value, hint, accent }: { label: string; value: React.Reac
   );
 }
 
-function Onboarding() {
-  const steps = [
-    { icon: KeyRound, title: "API keys instellen", text: "YouTube Data API (discovery) en OpenAI of Anthropic (AI-scoring). Zonder AI-key werkt een lokale heuristiek.", href: "/settings", cta: "Naar Settings" },
-    { icon: Users, title: "Creators toevoegen", text: "Zoek bijvoorbeeld Enzo Knol, Bankzitters of StukTV. Nieuwe uploads worden elke 2 uur gecontroleerd.", href: "/creators", cta: "Creators" },
-    { icon: Upload, title: "Bronvideo aanleveren", text: "Upload het videobestand (bijv. via het clipping-programma van de creator) of plaats het in de inbox-map.", href: "/videos", cta: "Videos" },
-  ];
+function SetupChecklist({ steps }: { steps: Dashboard["setup"] }) {
+  const done = steps.filter((s) => s.done).length;
+  const next = steps.find((s) => !s.done);
   return (
     <Card className="overflow-hidden">
-      <div className="border-b border-line px-6 py-5">
-        <p className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="size-4 text-fire" /> Aan de slag in 3 stappen</p>
-        <p className="mt-1 text-xs text-muted">Daarna vindt ViralClip AI zelfstandig de beste momenten en zet ze klaar als 9:16-clips.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-6 py-4">
+        <div>
+          <p className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="size-4 text-fire" /> Aan de slag</p>
+          <p className="mt-1 text-xs text-muted">Daarna vindt ViralClip AI zelfstandig de beste momenten en zet ze klaar als 9:16-clips.</p>
+        </div>
+        <span className="text-xs tabular-nums text-muted">{done} van {steps.length} klaar</span>
       </div>
-      <div className="grid divide-y divide-line md:grid-cols-3 md:divide-x md:divide-y-0">
+      <ol className="divide-y divide-line">
         {steps.map((s, i) => (
-          <div key={s.title} className="space-y-3 p-6">
-            <div className="flex items-center gap-3">
-              <span className="flex size-8 items-center justify-center rounded-lg bg-panel-3 text-xs font-bold text-ink-2">{i + 1}</span>
-              <s.icon className="size-4 text-fire" />
+          <li key={s.key} className={`flex items-center gap-4 px-6 py-3 ${s === next ? "bg-panel-2/60" : ""}`}>
+            {s.done ? (
+              <CheckCircle2 className="size-5 shrink-0 text-ok" />
+            ) : (
+              <span className="flex size-5 shrink-0 items-center justify-center rounded-full border border-line-2 text-[10px] font-bold text-muted">{i + 1}</span>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className={`text-sm ${s.done ? "text-muted line-through" : "font-semibold"}`}>{s.label}</p>
+              {!s.done && <p className="text-xs text-muted">{s.hint}</p>}
             </div>
-            <p className="text-sm font-semibold">{s.title}</p>
-            <p className="text-xs leading-relaxed text-muted">{s.text}</p>
-            <LinkButton href={s.href} className="h-8 px-3 text-xs">
-              {s.cta} <ArrowRight className="size-3.5" />
-            </LinkButton>
-          </div>
+            {!s.done && (
+              <LinkButton href={s.href} variant={s === next ? "fire" : "secondary"} className="h-8 shrink-0 px-3 text-xs">
+                Open <ArrowRight className="size-3.5" />
+              </LinkButton>
+            )}
+          </li>
         ))}
-      </div>
+      </ol>
     </Card>
   );
 }
@@ -100,6 +105,8 @@ export default function DashboardPage() {
           ))}
         </div>
       )}
+
+      {data.setup?.some((s) => !s.done) && <SetupChecklist steps={data.setup} />}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="🔥 High potential (24u)" value={data.new_potential_viral_clips} hint={`${data.unrated_high_potential} nog niet beoordeeld`} accent />
@@ -166,22 +173,20 @@ export default function DashboardPage() {
           <Link href="/clips" className="text-xs text-muted hover:text-ink">Alles bekijken →</Link>
         </div>
         {data.top_clips.length === 0 ? (
-          data.creators === 0 ? (
-            <Onboarding />
-          ) : (
-            <Card>
+          <Card>
               <EmptyState
                 icon={<Hourglass className="size-5" />}
                 title="Nog geen clips"
                 text={
-                  data.videos_awaiting_media > 0
-                    ? `${data.videos_awaiting_media} video('s) wachten op het bronbestand of transcript. Upload ze op de Videos-pagina of zet ze in de inbox-map.`
-                    : "Zodra je creators nieuwe video's plaatsen en de bron beschikbaar is, verschijnen hier de beste momenten."
+                  data.creators === 0
+                    ? "Voeg eerst een creator toe, bijvoorbeeld Enzo Knol, Bankzitters, Hanwe, Gio of StukTV."
+                    : data.videos_awaiting_media > 0
+                      ? `${data.videos_awaiting_media} video('s) wachten op het bronbestand of ondertitels. Lever ze aan op de Videos-pagina (upload, deel-link of .srt).`
+                      : "Zodra je creators nieuwe video's plaatsen en de bron beschikbaar is, verschijnen hier de beste momenten."
                 }
-                action={<LinkButton href="/videos">Naar Videos</LinkButton>}
+                action={<LinkButton href={data.creators ? "/videos" : "/creators"}>{data.creators ? "Naar Videos" : "Creator toevoegen"}</LinkButton>}
               />
             </Card>
-          )
         ) : (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
             {data.top_clips.map((c) => (

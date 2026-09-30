@@ -1,10 +1,11 @@
-"""Prompt templates + JSON schemas for the two LLM passes (and the optional vision pass).
+"""Prompt templates + JSON schemas for the two LLM passes (pass 1 and pass 3; pass 2 is local) and the
+optional vision pass.
 
 Design choices
 * The LLM never does timestamp arithmetic: it references sentence ids ([s41]); code maps them to
   word-accurate times. This removes the most common source of bad clip boundaries.
 * System prompts are static (no per-video data) so providers can cache them across calls.
-* Pass 1 is recall-oriented and cheap; pass 2 is a strict, calibrated, multi-dimension judgement
+* Pass 1 is recall-oriented and cheap; pass 3 is a strict, calibrated, multi-dimension judgement
   framed as "a random TikTok scroller with zero context" + "an experienced short-form editor".
 """
 
@@ -133,7 +134,7 @@ def candidate_user_prompt(
     return "\n".join(lines)
 
 
-# --- pass 2: detailed evaluation -------------------------------------------------------------------
+# --- pass 3: detailed evaluation -------------------------------------------------------------------
 
 EVALUATOR_SYSTEM = """You are the final quality gate of a short-form clipping studio. You combine two perspectives:
 (1) A panel of ordinary TikTok viewers (mostly 16-30, Dutch/Flemish speaking) who scroll fast, know nothing about this video or creator, and decide within one or two seconds whether to keep watching.

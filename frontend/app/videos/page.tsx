@@ -8,7 +8,7 @@ import { Suspense, useState } from "react";
 import { ScoreBadge } from "@/components/clips";
 import { errorText, useToast } from "@/components/toast";
 import { Badge, Button, Card, EmptyState, Input, PageHeader, ProgressBar, Select, Spinner } from "@/components/ui";
-import { AddVideoModal, UploadMediaButton } from "@/components/uploads";
+import { AddVideoModal, ImportLinkButton, UploadMediaButton } from "@/components/uploads";
 import { api, useApi } from "@/lib/api";
 import { compactNumber, formatDuration, relativeTime, VIDEO_STATUS } from "@/lib/format";
 import type { Creator, Video } from "@/lib/types";
@@ -37,6 +37,7 @@ function VideosInner() {
   }
 
   async function analyze(v: Video) {
+    if (v.status === "analyzed" && !confirm("Deze video is al geanalyseerd. Opnieuw analyseren kost opnieuw AI-tegoed. Doorgaan?")) return;
     try {
       await api(`/api/videos/${v.id}/analyze`, { method: "POST", json: { force: true } });
       toast("Analyse ingepland");
@@ -133,8 +134,13 @@ function VideosInner() {
                         {v.clip_count} clips {v.best_score != null && <ScoreBadge score={v.best_score} />}
                       </Link>
                     )}
-                    {!v.has_media && <UploadMediaButton video={v} onDone={() => mutate()} />}
-                    <Button size="sm" variant="ghost" title="(Opnieuw) analyseren" onClick={() => analyze(v)}><Wand2 className="size-3.5" /></Button>
+                    {!v.has_media && v.status !== "skipped" && (
+                      <>
+                        <UploadMediaButton video={v} onDone={() => mutate()} />
+                        <ImportLinkButton video={v} onDone={() => mutate()} />
+                      </>
+                    )}
+                    <Button size="sm" variant="ghost" title={v.status === "analyzed" ? "Opnieuw analyseren" : "Analyseren"} onClick={() => analyze(v)}><Wand2 className="size-3.5" /></Button>
                     {v.status !== "skipped" && v.status !== "analyzed" && (
                       <Button size="sm" variant="ghost" title="Overslaan" onClick={() => skip(v)}><Ban className="size-3.5" /></Button>
                     )}

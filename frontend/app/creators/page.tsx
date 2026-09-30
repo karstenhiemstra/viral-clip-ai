@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Users } from "lucide-react";
+import { Download, ExternalLink, Plus, RefreshCw, Search, SlidersHorizontal, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -26,6 +26,75 @@ function scanState(c: Creator): { tone: Tone; label: string } {
   return { tone: "success", label: "OK" };
 }
 
+const PERIODS = [
+  { value: "24h", label: "Laatste 24 uur" },
+  { value: "7d", label: "Laatste 7 dagen" },
+  { value: "30d", label: "Laatste 30 dagen" },
+  { value: "all", label: "Alles (nieuwste eerst)" },
+];
+const COUNTS = [
+  { value: 5, label: "5 video's" },
+  { value: 10, label: "10 video's" },
+  { value: 25, label: "25 video's" },
+  { value: 50, label: "50 video's" },
+  { value: 0, label: "Alle video's in die periode" },
+];
+
+function FetchChoice({ period, count, onPeriod, onCount }: { period: string; count: number; onPeriod: (v: string) => void; onCount: (v: number) => void }) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <Field label="Periode">
+        <Select value={period} onChange={(e) => onPeriod(e.target.value)} className="w-full">
+          {PERIODS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+        </Select>
+      </Field>
+      <Field label="Aantal video's">
+        <Select value={count} onChange={(e) => onCount(Number(e.target.value))} className="w-full">
+          {COUNTS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+        </Select>
+      </Field>
+    </div>
+  );
+}
+
+function FetchModal({ creator, onClose, onDone }: { creator: Creator | null; onClose: () => void; onDone: () => void }) {
+  const toast = useToast();
+  const [period, setPeriod] = useState("7d");
+  const [count, setCount] = useState(10);
+  const [busy, setBusy] = useState(false);
+  if (!creator) return null;
+
+  async function run() {
+    if (!creator) return;
+    setBusy(true);
+    try {
+      await api(`/api/creators/${creator.id}/scan`, { method: "POST", json: { period, max_videos: count } });
+      toast(`Video's van ${creator.name} worden opgehaald — resultaat verschijnt bij Video's`);
+      onDone();
+      onClose();
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open={!!creator} onClose={onClose} title={`Video's ophalen · ${creator.name}`}>
+      <p className="mb-4 text-sm text-ink-2">
+        Haalt de nieuwste uploads op via de officiële YouTube API en zet de gekozen video&apos;s klaar voor analyse.
+        Video&apos;s die al geanalyseerd zijn worden niet opnieuw verwerkt.
+      </p>
+      <FetchChoice period={period} count={count} onPeriod={setPeriod} onCount={setCount} />
+      <p className="mt-3 text-xs text-muted">Kost ongeveer 1–3 YouTube-quota-units (van de 10.000 gratis per dag).</p>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button onClick={onClose}>Annuleren</Button>
+        <Button variant="fire" loading={busy} icon={<Download className="size-4" />} onClick={run}>Ophalen</Button>
+      </div>
+    </Modal>
+  );
+}
+
 function Avatar({ src, name, size = 36 }: { src: string | null; name: string; size?: number }) {
   return src ? (
     // eslint-disable-next-line @next/next/no-img-element
@@ -47,6 +116,8 @@ function AddCreatorModal({ open, onClose, onAdded }: { open: boolean; onClose: (
   const [adding, setAdding] = useState<string | null>(null);
   const [priority, setPriority] = useState<Priority>("normal");
   const [language, setLanguage] = useState("nl");
+  const [period, setPeriod] = useState("7d");
+  const [count, setCount] = useState(5);
 
   async function search(e?: React.FormEvent) {
     e?.preventDefault();
@@ -68,8 +139,11 @@ function AddCreatorModal({ open, onClose, onAdded }: { open: boolean; onClose: (
   async function add(ch: ChannelResult) {
     setAdding(ch.channel_id);
     try {
-      await api("/api/creators", { method: "POST", json: { channel_id: ch.channel_id, priority, language } });
-      toast(`${ch.title} toegevoegd — eerste scan is gestart`);
+      await api("/api/creators", {
+        method: "POST",
+        json: { channel_id: ch.channel_id, priority, language, initial_period: period, initial_max_videos: count },
+      });
+      toast(`${ch.title} toegevoegd — video's worden opgehaald`);
       onAdded();
       setResults((r) => r?.map((x) => (x.channel_id === ch.channel_id ? { ...x, already_added: true } : x)) ?? null);
     } catch (err) {
@@ -102,6 +176,10 @@ function AddCreatorModal({ open, onClose, onAdded }: { open: boolean; onClose: (
             <option value="de">Duits</option>
           </Select>
         </Field>
+      </div>
+      <div className="mt-3">
+        <p className="mb-2 text-xs font-medium text-muted">Direct ophalen na toevoegen</p>
+        <FetchChoice period={period} count={count} onPeriod={setPeriod} onCount={setCount} />
       </div>
       <div className="mt-4 space-y-2">
         <ErrorNote error={error} />
@@ -208,16 +286,7 @@ export default function CreatorsPage() {
   const { data, mutate, isLoading } = useApi<Creator[]>("/api/creators", { refreshInterval: 8000 });
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Creator | null>(null);
-
-  async function scan(c: Creator) {
-    try {
-      await api(`/api/creators/${c.id}/scan`, { method: "POST" });
-      toast(`Scan van ${c.name} gestart`);
-      mutate();
-    } catch (e) {
-      toast(errorText(e), "error");
-    }
-  }
+  const [fetching, setFetching] = useState<Creator | null>(null);
   async function scanAll() {
     try {
       const r = await api<{ queued: number }>("/api/creators/scan-all", { method: "POST" });
@@ -311,7 +380,9 @@ export default function CreatorsPage() {
                       </td>
                       <td className="px-5 py-3">
                         <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="ghost" title="Nu scannen" onClick={() => scan(c)}><RefreshCw className="size-3.5" /></Button>
+                          <Button size="sm" variant="secondary" title="Video's ophalen" icon={<Download className="size-3.5" />} onClick={() => setFetching(c)}>
+                            Video&apos;s ophalen
+                          </Button>
                           <Button size="sm" variant="ghost" title="Instellingen" onClick={() => setEditing(c)}><SlidersHorizontal className="size-3.5" /></Button>
                           <Button size="sm" variant="ghost" title="Verwijderen" onClick={() => remove(c)}><Trash2 className="size-3.5" /></Button>
                         </div>
@@ -326,6 +397,7 @@ export default function CreatorsPage() {
       </Card>
       <AddCreatorModal open={adding} onClose={() => setAdding(false)} onAdded={() => mutate()} />
       <CreatorSettingsModal creator={editing} onClose={() => setEditing(null)} onSaved={() => mutate()} />
+      <FetchModal key={fetching?.id ?? 0} creator={fetching} onClose={() => setFetching(null)} onDone={() => mutate()} />
     </div>
   );
 }

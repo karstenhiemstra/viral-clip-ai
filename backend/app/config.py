@@ -46,13 +46,17 @@ class Settings(BaseSettings):
 
     # --- external APIs --------------------------------------------------------
     youtube_api_key: str = ""
+    # Override only for testing / corporate proxies.
+    youtube_api_base: str = "https://www.googleapis.com/youtube/v3"
+    youtube_web_base: str = "https://www.youtube.com"
     openai_api_key: str = ""
     openai_base_url: str = ""
     anthropic_api_key: str = ""
 
     # --- AI defaults (overridable from Settings page) -------------------------
     llm_provider: str = "auto"  # auto | openai | anthropic | heuristic
-    llm_model_fast: str = ""  # empty -> provider default
+    llm_quality: str = "balanced"  # budget | balanced | best
+    llm_model_fast: str = ""  # empty -> model from the quality preset
     llm_model_smart: str = ""
     transcriber: str = "auto"  # auto | openai | faster_whisper | none
     whisper_model: str = "whisper-1"
@@ -64,6 +68,8 @@ class Settings(BaseSettings):
     worker_id: str = ""
     job_stale_minutes: int = 30
     inbox_scan_seconds: int = 60
+    # Largest accepted upload / imported source file.
+    max_upload_gb: float = 20.0
 
     # --- tools ------------------------------------------------------------------
     ffmpeg_bin: str = "ffmpeg"

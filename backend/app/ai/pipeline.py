@@ -1,10 +1,11 @@
 """The analysis pipeline: long video -> ranked, de-duplicated, hook-first clip plans.
 
-    transcript (Whisper / SRT)                       pass 1 (only if missing)
+    transcript (Whisper / SRT, only if missing)
       -> sentence units + audio loudness + scene cuts + audience hotspots   (free, local)
-      -> candidates: signal windows  +  LLM pass 1 (cheap model)            stage 1
-      -> shortlist (top N by priority)
-      -> LLM pass 2 (smart model): viewer simulation, 12 dimensions, edit   stages 2-7
+      -> PASS 1: signal windows  +  LLM on the full transcript (cheap model) stage 1
+      -> PASS 2: merge + dedupe + shortlist top N (free, local)
+      -> PASS 3: smart model judges ONLY the shortlist: viewer simulation,
+         12 dimensions, verdict, better edit                                 stages 2-7
       -> hook-first boundary optimisation + dead-air removal                stage 10
       -> funnel Viral Score (+ signal blend, penalties, crowd, personal)    stage 9
       -> optional vision pass on the best few                               pass 5
@@ -32,7 +33,7 @@ from app.ai.evaluator import (
     heuristic_flags,
     heuristic_packaging,
 )
-from app.ai.llm import LLMClient, UsageMeter
+from app.ai.llm import LLMClient, LLMFatalError, UsageMeter
 from app.ai.scoring import compute_viral_score
 from app.ai.signals import (
     VideoContext,
@@ -219,27 +220,38 @@ def analyze_video(
     sig = signal_candidates(ctx, count=count, min_s=rules.min_seconds, max_s=rules.max_seconds, target_s=rules.target_seconds)
     llm_c: list[Candidate] = []
     if llm is not None:
-        llm_c = llm_candidates(
-            llm, ctx, target_count=count, min_s=rules.min_seconds, max_s=rules.max_seconds, output_language=lang,
-            meter=meter, progress=lambda f: report(35 + 15 * f, "AI pass 1: momenten zoeken"), warnings=warnings,
-        )
+        # Pass 1 (cheap "fast" model): read the whole transcript in chunks and propose moments.
+        try:
+            llm_c = llm_candidates(
+                llm, ctx, target_count=count, min_s=rules.min_seconds, max_s=rules.max_seconds, output_language=lang,
+                meter=meter, progress=lambda f: report(35 + 15 * f, "Pass 1 (goedkoop model): momenten zoeken"),
+                warnings=warnings,
+            )
+        except LLMFatalError as e:
+            warnings.append(f"AI uitgeschakeld voor deze analyse: {e}")
+            llm = None
+    # Pass 2 (free, local): merge AI moments with signal-based ones, dedupe, keep the best `count`.
     cands = merge_candidates(ctx, [llm_c, sig])
     shortlist = cands[:count]
-    mark("candidates", signal=len(sig), llm=len(llm_c), merged=len(cands), shortlist=len(shortlist))
+    mark("pass2_shortlist", signal=len(sig), llm=len(llm_c), merged=len(cands), shortlist=len(shortlist))
 
-    # 4. detailed evaluation ------------------------------------------------------------------------
+    # Pass 3 (smart model): detailed evaluation of ONLY the shortlisted candidates.
     evaluated_by_llm = 0
     if llm is not None and shortlist:
-        report(50, f"AI pass 2: {len(shortlist)} kandidaten beoordelen")
-        evaluated_by_llm = evaluate_llm(
-            llm, ctx, shortlist, min_s=rules.min_seconds, max_s=rules.max_seconds, target_s=rules.target_seconds,
-            output_language=lang, batch_size=rs.pipeline.detail_batch_size, meter=meter,
-            progress=lambda f: report(50 + 30 * f, "AI pass 2: kandidaten beoordelen"), warnings=warnings,
-        )
+        report(50, f"Pass 3 (slim model): {len(shortlist)} kandidaten beoordelen")
+        try:
+            evaluated_by_llm = evaluate_llm(
+                llm, ctx, shortlist, min_s=rules.min_seconds, max_s=rules.max_seconds, target_s=rules.target_seconds,
+                output_language=lang, batch_size=rs.pipeline.detail_batch_size, meter=meter,
+                progress=lambda f: report(50 + 30 * f, "Pass 3 (slim model): kandidaten beoordelen"), warnings=warnings,
+            )
+        except LLMFatalError as e:
+            warnings.append(f"AI uitgeschakeld voor deze analyse: {e}")
+            llm = None
         if evaluated_by_llm == 0:
-            warnings.append("LLM-beoordeling niet gelukt; heuristische scoring gebruikt")
+            warnings.append("AI-beoordeling (pass 3) niet gelukt; heuristische scoring gebruikt")
     evaluate_heuristic(ctx, shortlist)
-    mark("evaluation", llm_evaluated=evaluated_by_llm, heuristic=len(shortlist) - evaluated_by_llm)
+    mark("pass3_evaluation", llm_evaluated=evaluated_by_llm, heuristic=len(shortlist) - evaluated_by_llm)
 
     # 5. boundaries + scoring -----------------------------------------------------------------------
     report(82, "Clipgrenzen optimaliseren en scoren")

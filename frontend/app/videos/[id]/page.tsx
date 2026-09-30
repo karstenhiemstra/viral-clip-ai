@@ -7,7 +7,7 @@ import { useParams, useRouter } from "next/navigation";
 import { ClipCard, ScoreBadge } from "@/components/clips";
 import { errorText, useToast } from "@/components/toast";
 import { Badge, Button, Card, CardHeader, EmptyState, PageHeader, ProgressBar, Spinner } from "@/components/ui";
-import { UploadMediaButton, UploadTranscriptButton } from "@/components/uploads";
+import { ImportLinkButton, UploadMediaButton, UploadTranscriptButton } from "@/components/uploads";
 import { api, useApi } from "@/lib/api";
 import { CATEGORY_LABELS, compactNumber, formatDate, formatDuration, formatNumber, formatTimestamp, money, VIDEO_STATUS } from "@/lib/format";
 import type { Clip, Video } from "@/lib/types";
@@ -26,6 +26,7 @@ export default function VideoDetailPage() {
   const refresh = () => { mutate(); mutateClips(); };
 
   async function analyze() {
+    if (v!.status === "analyzed" && !confirm("Deze video is al geanalyseerd. Opnieuw analyseren kost opnieuw AI-tegoed. Doorgaan?")) return;
     try {
       await api(`/api/videos/${v!.id}/analyze`, { method: "POST", json: { force: true } });
       toast("Analyse ingepland");
@@ -58,7 +59,7 @@ export default function VideoDetailPage() {
         }
         actions={
           <>
-            <Button icon={<Wand2 className="size-4" />} onClick={analyze}>Opnieuw analyseren</Button>
+            <Button icon={<Wand2 className="size-4" />} onClick={analyze}>{v.status === "analyzed" ? "Opnieuw analyseren" : "Analyseren"}</Button>
             <Button variant="ghost" icon={<Trash2 className="size-4" />} onClick={remove}>Verwijderen</Button>
           </>
         }
@@ -88,14 +89,19 @@ export default function VideoDetailPage() {
                   ? `${String(v.media_meta.width ?? "?")}×${String(v.media_meta.height ?? "?")} · ${formatDuration(Number(v.media_meta.duration ?? 0))} · via ${v.media_origin}`
                   : "Nodig voor audio-analyse en het renderen van verticale clips."}
               </p>
-              <UploadMediaButton video={v} onDone={refresh} />
+              <div className="flex flex-wrap gap-2">
+                <UploadMediaButton video={v} onDone={refresh} />
+                <ImportLinkButton video={v} onDone={refresh} />
+              </div>
             </div>
             <div className="space-y-2 rounded-xl border border-line bg-panel-2 p-4">
               <p className="flex items-center gap-2 text-sm font-semibold">
                 {v.has_transcript ? <Check className="size-4 text-ok" /> : <span className="size-4 rounded-full border border-line-2" />} Transcript
               </p>
               <p className="text-xs text-muted">
-                {v.has_transcript ? `${formatNumber(v.transcript_words ?? 0)} woorden · bron: ${v.transcript_source}` : "Wordt automatisch gemaakt met Whisper zodra het videobestand er is, of upload SRT/VTT."}
+                {v.has_transcript
+                  ? `${formatNumber(v.transcript_words ?? 0)} woorden · bron: ${v.transcript_source}`
+                  : "Wordt automatisch gemaakt met Whisper zodra het videobestand er is. Of upload ondertitels (.srt/.vtt): dan kan de analyse al starten, zonder transcriptiekosten."}
               </p>
               <UploadTranscriptButton video={v} onDone={refresh} />
             </div>

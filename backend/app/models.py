@@ -78,6 +78,7 @@ class JobType:
     ANALYZE_VIDEO = "analyze_video"
     RENDER_CLIP = "render_clip"
     TRAIN_MODEL = "train_model"
+    IMPORT_MEDIA = "import_media"
 
 
 class Rating:

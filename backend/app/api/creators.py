@@ -27,12 +27,24 @@ router = APIRouter(prefix="/api/creators", tags=["creators"])
 PENDING = (VideoStatus.DISCOVERED, VideoStatus.QUEUED, VideoStatus.AWAITING_MEDIA, VideoStatus.ANALYZING)
 
 
+Period = Literal["today", "24h", "7d", "30d", "all"]
+
+
+class FetchRequest(BaseModel):
+    """Manual 'Video's ophalen': which period and how many videos to (re)consider."""
+
+    period: Period | None = None
+    max_videos: int | None = Field(None, ge=0, le=200)  # 0 = all within the period
+
+
 class CreatorCreate(BaseModel):
-    channel_id: str = Field(..., min_length=3)
-    name: str | None = None
+    channel_id: str = Field(..., min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str | None = Field(None, max_length=200)
     priority: Literal["low", "normal", "high"] = "normal"
-    language: str = "nl"
+    language: Literal["nl", "en", "de", "fr"] = "nl"
     scan_now: bool = True
+    initial_period: Period | None = None
+    initial_max_videos: int | None = Field(None, ge=0, le=200)
 
 
 class CreatorUpdate(BaseModel):
@@ -146,7 +158,11 @@ def create_creator(body: CreatorCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Kanaal niet gevonden")
     creator = upsert_creator(db, ch, name=body.name, priority=body.priority, language=body.language)
     if body.scan_now:
-        queue.enqueue(db, JobType.SCAN_CREATOR, creator_id=creator.id, priority=95, title=f"Scan {creator.name}")
+        payload = {"manual": True, "period": body.initial_period, "max_videos": body.initial_max_videos}
+        queue.enqueue(
+            db, JobType.SCAN_CREATOR, creator_id=creator.id, priority=95, title=f"Eerste scan {creator.name}",
+            payload={k: v for k, v in payload.items() if v is not None},
+        )
     return creator_out(creator)
 
 
@@ -187,11 +203,19 @@ def delete_creator(creator_id: int, delete_videos: bool = False, db: Session = D
 
 
 @router.post("/{creator_id}/scan")
-def scan_now(creator_id: int, db: Session = Depends(get_db)):
+def scan_now(creator_id: int, body: FetchRequest | None = None, db: Session = Depends(get_db)):
+    """Scan now. With a period / number of videos this is a manual fetch that also reconsiders earlier
+    discovered-but-not-analysed videos of this creator."""
     c = db.get(Creator, creator_id)
     if c is None:
         raise HTTPException(status_code=404, detail="Creator niet gevonden")
-    job = queue.enqueue(db, JobType.SCAN_CREATOR, creator_id=c.id, priority=95, title=f"Scan {c.name}")
+    payload: dict = {"manual": True}
+    if body is not None:
+        if body.period:
+            payload["period"] = body.period
+        if body.max_videos is not None:
+            payload["max_videos"] = body.max_videos
+    job = queue.enqueue(db, JobType.SCAN_CREATOR, creator_id=c.id, priority=95, title=f"Video's ophalen: {c.name}", payload=payload)
     return {"job_id": job.id}
 
 

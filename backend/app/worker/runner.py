@@ -20,7 +20,7 @@ from app.models import Job, JobType
 from app.services import queue
 from app.services.discovery import due_creators
 from app.services.media import scan_inbox
-from app.services.queue import JobCancelled, JobContext, JobWaiting
+from app.services.queue import JobCancelled, JobContext, JobWaiting, PermanentJobError
 from app.services.settings_store import load_settings
 from app.worker.tasks import HANDLERS
 
@@ -97,6 +97,9 @@ class Worker:
             log.info("Job %s waiting: %s", job.id, w.message)
         except JobCancelled:
             log.info("Job %s cancelled", job.id)
+        except PermanentJobError as e:
+            log.error("Job %s failed permanently: %s", job.id, e)
+            queue.fail(job.id, str(e), retry=False)
         except Exception as e:
             log.error("Job %s failed: %s", job.id, e)
             queue.fail(job.id, f"{e}\n\n{traceback.format_exc(limit=6)}")

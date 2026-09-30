@@ -1,4 +1,4 @@
-"""Stages 2-7 - detailed evaluation of the shortlisted candidates.
+"""Pass 3 (stages 2-7) - detailed evaluation of ONLY the shortlisted candidates.
 
 LLM mode: candidates are judged in small batches (default 6) by the "smart" model with the rubric in
 ``prompts.EVALUATOR_SYSTEM``: viewer simulation, 12 calibrated dimension scores (hook, context,
@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.ai.candidates import Candidate
-from app.ai.llm import LLMClient, LLMError, UsageMeter
+from app.ai.llm import LLMClient, LLMError, LLMFatalError, UsageMeter
 from app.ai.prompts import (
     CATEGORIES,
     EVALUATION_SCHEMA,
@@ -81,10 +81,12 @@ def evaluate_llm(
                 system=EVALUATOR_SYSTEM, user=prompt, schema=EVALUATION_SCHEMA, schema_name="evaluations",
                 tier="smart", max_tokens=1200 * len(batch) + 1000,
             )
+        except LLMFatalError:
+            raise
         except LLMError as e:
             log.warning("Evaluation batch %s failed: %s", bi, e)
             if warnings is not None:
-                warnings.append(f"Pass 2 batch {bi + 1}: {e}")
+                warnings.append(f"Pass 3 batch {bi + 1}: {e}")
             continue
         meter.add(res.usage, "evaluation")
         by_id = {str(ev.get("id", "")).strip(): ev for ev in res.data.get("evaluations", []) or []}

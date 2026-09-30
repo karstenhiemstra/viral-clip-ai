@@ -229,6 +229,7 @@ export interface Dashboard {
   today_by_creator: Clip[];
   usage: Usage;
   warnings: { level: "error" | "warning"; text: string }[];
+  setup: { key: string; done: boolean; label: string; hint: string; href: string }[];
 }
 
 export interface Analytics {
@@ -315,6 +316,7 @@ export interface SettingsPayload {
     };
     ai: {
       llm_provider: string;
+      quality: "budget" | "balanced" | "best";
       model_fast: string;
       model_smart: string;
       vision_model: string;
@@ -334,6 +336,13 @@ export interface SettingsPayload {
     database: string;
     auth_enabled: boolean;
     timezone: string;
+    cost_estimate: {
+      provider: string;
+      active: boolean;
+      quality: string;
+      whisper_api: boolean;
+      rows: ({ minutes: number; transcription: number } & Record<string, unknown>)[];
+    };
   };
   meta: {
     dimensions: { key: string; label: string }[];

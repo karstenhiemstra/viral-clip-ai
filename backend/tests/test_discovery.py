@@ -1,8 +1,9 @@
 from datetime import timedelta
 
+import pytest
 from sqlalchemy import select
 
-from app.models import Creator, Job, JobType, Video, VideoStatus, utcnow
+from app.models import Creator, Job, JobStatus, JobType, Video, VideoStatus, utcnow
 from app.services.discovery import (
     add_video_by_url,
     check_video,
@@ -13,53 +14,63 @@ from app.services.discovery import (
     upsert_creator,
 )
 from app.services.settings_store import DiscoverySettings, RuntimeSettings, load_settings, update_settings
-from app.services.youtube import ChannelInfo, Comment, VideoInfo
+from app.services.youtube import YouTubeError
+from tests.youtube_stub import StubChannel, StubVideo, YouTubeStub
+
+ENZO = StubChannel("UCenzoknol0000000000000", "Enzo Knol", "@EnzoKnol", subscribers=2_700_000)
+BANK = StubChannel("UCbankzitters00000000000", "Bankzitters", "@Bankzitters", subscribers=1_900_000)
 
 
-class FakeYouTube:
-    """In-memory stand-in for YouTubeClient."""
-
-    def __init__(self, videos: list[VideoInfo], has_key: bool = True):
-        self.videos = {v.video_id: v for v in videos}
-        self.has_key = has_key
-        self.calls: list[str] = []
-
-    def fetch_rss(self, channel_id):
-        self.calls.append("rss")
-        return [VideoInfo(video_id=v.video_id, title=v.title, published_at=v.published_at, channel_title="Test") for v in self.videos.values()][:15]
-
-    def list_upload_ids(self, playlist, max_items=50):
-        self.calls.append("playlist")
-        return list(self.videos)[:max_items]
-
-    def get_videos(self, ids):
-        self.calls.append(f"videos:{len(ids)}")
-        return [self.videos[i] for i in ids if i in self.videos]
-
-    def get_top_comments(self, video_id, max_results=100):
-        self.calls.append("comments")
-        return [Comment("2:05 hahaha 😂", likes=500)]
-
-    def get_channels(self, ids):
-        return [ChannelInfo(ids[0], "Test Creator", subscriber_count=1234, uploads_playlist_id="UUx")]
-
-    def fetch_oembed(self, video_id):
-        return VideoInfo(video_id=video_id, title="oEmbed titel", channel_title="Iemand")
+def _videos(channel: StubChannel, specs: list[tuple[str, float, int]]) -> list[StubVideo]:
+    """specs: (id-suffix, days_old, duration_seconds)"""
+    now = utcnow()
+    out = []
+    for suffix, days, dur in specs:
+        vid = (channel.title[:3].upper() + suffix).ljust(11, "x")[:11]
+        out.append(
+            StubVideo(
+                vid, channel.id, f"{channel.title} vlog {suffix}", now - timedelta(days=days), duration=dur,
+                views=int(80_000 / (days + 1)), comments=400, top_comments=[("2:05 hahaha 😂", 900), ("2:07 niet normaal", 300)],
+            )
+        )
+    return out
 
 
-def _video(vid, minutes=20, days_old=1, views=10000, short=False, live="none"):
-    return VideoInfo(
-        video_id=vid,
-        title=f"Video {vid}",
-        channel_id="UCtest",
-        published_at=utcnow() - timedelta(days=days_old),
-        duration_seconds=minutes * 60,
-        view_count=views,
-        like_count=views // 20,
-        comment_count=views // 200,
-        is_short=short,
-        live_status=live,
-    )
+@pytest.fixture()
+def stub():
+    vids = _videos(ENZO, [("a1", 0.2, 1320), ("a2", 1.5, 95), ("a3", 3, 45), ("a4", 5, 1800), ("a5", 12, 1500),
+                          ("a6", 20, 1100), ("a7", 40, 900)])
+    vids += _videos(BANK, [("b1", 0.5, 2400), ("b2", 2, 2100)])
+    return YouTubeStub([ENZO, BANK], vids)
+
+
+def _creator(db, stub, ch=ENZO, **kw):
+    info = stub.client().get_channels([ch.id])[0]
+    return upsert_creator(db, info, **kw)
+
+
+# --- channel lookup ------------------------------------------------------------------------------
+
+
+def test_find_creator_by_name_handle_and_url(stub):
+    yt = stub.client()
+    by_name = yt.resolve_channel("Enzo Knol")
+    assert by_name[0].channel_id == ENZO.id and by_name[0].subscriber_count == 2_700_000
+    assert by_name[0].uploads_playlist_id == "UU" + ENZO.id[2:]
+    assert yt.resolve_channel("@Bankzitters")[0].title == "Bankzitters"
+    assert yt.resolve_channel(f"https://www.youtube.com/channel/{BANK.id}")[0].title == "Bankzitters"
+    # "EnzoKnol" is tried as a handle first (1 quota unit) before the 100-unit search
+    stub.calls.clear()
+    yt.resolve_channel("EnzoKnol")
+    assert stub.calls[0] == "channels"
+
+
+def test_friendly_errors_for_bad_key(stub):
+    with pytest.raises(YouTubeError, match="ongeldig"):
+        stub.client(api_key="wrong").get_channels([ENZO.id])
+
+
+# --- filters & prescore --------------------------------------------------------------------------
 
 
 def test_check_video_filters():
@@ -97,60 +108,121 @@ def test_prescore_rewards_overperformance_and_crowd():
     assert with_crowd > normal and "crowd" in details
 
 
-def test_scan_creator_discovers_filters_and_queues(db):
-    creator = upsert_creator(db, ChannelInfo("UCtest0000000000000000", "Test Creator"), priority="high")
-    yt = FakeYouTube([
-        _video("AAAAAAAAAA1", minutes=20, days_old=1),
-        _video("AAAAAAAAAA2", minutes=2, days_old=1),  # too short
-        _video("AAAAAAAAAA3", minutes=30, days_old=20),  # too old for 7d
-        _video("AAAAAAAAAA4", minutes=1, days_old=1, short=True),
-        _video("AAAAAAAAAA5", minutes=15, days_old=2),
-    ])
-    rs = load_settings(db)
-    result = scan_creator(db, creator, yt, rs)
-    assert result.new == 5
-    assert result.queued == 2
-    assert result.skipped == 3
-    statuses = {v.youtube_video_id: v.status for v in db.scalars(select(Video)).all()}
-    assert statuses["AAAAAAAAAA1"] == VideoStatus.QUEUED
-    assert statuses["AAAAAAAAAA2"] == VideoStatus.SKIPPED
-    jobs = db.scalars(select(Job).where(Job.type == JobType.ANALYZE_VIDEO)).all()
-    assert len(jobs) == 2
-    v1 = db.scalar(select(Video).where(Video.youtube_video_id == "AAAAAAAAAA1"))
-    assert v1.crowd_hotspots and v1.crowd_hotspots[0]["time"] == 125.0
-    assert creator.last_scan_status == "ok" and creator.last_scanned_at is not None
+# --- scanning --------------------------------------------------------------------------------------
 
-    # A second scan must not duplicate anything.
-    again = scan_creator(db, creator, yt, rs)
+
+def test_scan_uses_official_api_filters_and_queues(db, stub):
+    creator = _creator(db, stub, priority="high")
+    stub.calls.clear()
+    result = scan_creator(db, creator, stub.client(), load_settings(db))  # defaults: 7 days, min 5 min, 10 videos
+    assert result.source == "api"
+    assert "playlistItems" in stub.calls and "feeds" not in " ".join(stub.calls)
+    # a1 (22 min) and a4 (30 min) pass; a2 (95s) is too short, a3 is a Short, a5+ are older than 7 days
+    # and are never even listed thanks to the early cutoff.
+    assert result.found == 4 and result.new == 4
+    assert result.queued == 2 and result.skipped == 2
+    statuses = {v.youtube_video_id[3:5]: v.status for v in db.scalars(select(Video)).all()}
+    assert statuses == {"a1": VideoStatus.QUEUED, "a4": VideoStatus.QUEUED, "a2": VideoStatus.SKIPPED, "a3": VideoStatus.SKIPPED}
+    v1 = db.scalar(select(Video).where(Video.youtube_video_id.like("ENZa1%")))
+    assert v1.duration_seconds == 1320 and v1.view_count and 125 <= v1.crowd_hotspots[0]["time"] <= 127
+    assert creator.last_scan_status == "ok" and creator.last_video_title.endswith("a1")
+    assert len(db.scalars(select(Job).where(Job.type == JobType.ANALYZE_VIDEO)).all()) == 2
+
+    # Scanning again finds nothing new and never re-queues analysed/queued videos.
+    again = scan_creator(db, creator, stub.client(), load_settings(db))
     assert again.new == 0 and again.queued == 0
-    assert len(db.scalars(select(Video)).all()) == 5
+    assert len(db.scalars(select(Job).where(Job.type == JobType.ANALYZE_VIDEO)).all()) == 2
 
 
-def test_scan_respects_max_videos_per_scan(db):
+def test_manual_fetch_with_period_and_count_reconsiders_skipped(db, stub):
+    creator = _creator(db, stub)
+    scan_creator(db, creator, stub.client(), load_settings(db))  # 7 days
+    # Now: "afgelopen 30 dagen, 5 video's" -> a5 (12d) and a6 (20d) become eligible too; a7 (40d) not.
+    result = scan_creator(db, creator, stub.client(), load_settings(db), period="30d", max_videos=5, manual=True)
+    assert result.found == 6
+    queued = {v.youtube_video_id[3:5] for v in db.scalars(select(Video).where(Video.status == VideoStatus.QUEUED)).all()}
+    assert queued == {"a1", "a4", "a5", "a6"}
+    # max_videos limits the number of videos picked in this run
+    limited = scan_creator(db, _creator(db, stub, ch=BANK), stub.client(), load_settings(db), period="30d", max_videos=1, manual=True)
+    assert limited.queued == 1
+
+
+def test_rss_fallback_without_api_key(db, stub):
+    creator = _creator(db, stub)
+    result = scan_creator(db, creator, stub.client(api_key=None), load_settings(db))
+    assert result.source == "rss" and result.found == 7
+    # without metadata (no key) duration is unknown, so only the period filter applies
+    assert result.queued >= 1
+
+
+def test_scan_respects_max_videos_per_scan_setting(db, stub):
     update_settings(db, {"discovery": {"max_videos_per_scan": 1}})
-    creator = upsert_creator(db, ChannelInfo("UCtest0000000000000001", "C"))
-    yt = FakeYouTube([_video(f"BBBBBBBBBB{i}", minutes=20, days_old=1, views=1000 * (i + 1)) for i in range(4)])
-    result = scan_creator(db, creator, yt, load_settings(db))
+    result = scan_creator(db, _creator(db, stub), stub.client(), load_settings(db))
     assert result.queued == 1
+    backlog = db.scalars(select(Video).where(Video.status == VideoStatus.DISCOVERED)).all()
+    assert len(backlog) == 1 and "top 1" in backlog[0].skip_reason
 
 
-def test_add_video_by_url_without_api_key_uses_oembed(db):
-    yt = FakeYouTube([], has_key=False)
-    video = add_video_by_url(db, yt, "https://youtu.be/dQw4w9WgXcQ", RuntimeSettings())
-    assert video.title == "oEmbed titel"
+def test_ten_creators_are_monitored_by_the_scheduler(db, stub):
+    """Scheduler: every due creator gets exactly one scan job, and new uploads flow into the queue."""
+    from app.worker.runner import Worker
+
+    channels, videos = [], []
+    for i in range(10):
+        ch = StubChannel(f"UCcreator{i:02d}".ljust(24, "0"), f"Creator {i}", f"@creator{i}")
+        channels.append(ch)
+        videos.append(StubVideo(f"vid{i:02d}".ljust(11, "x"), ch.id, f"Nieuwe video {i}", utcnow() - timedelta(hours=3), duration=1200))
+    many = YouTubeStub(channels, videos)
+    for ch in channels:
+        upsert_creator(db, many.client().get_channels([ch.id])[0])
+    assert len(due_creators(db, load_settings(db))) == 10
+
+    worker = Worker("sched-test")
+    assert worker.schedule_scans() == 10
+    assert worker.schedule_scans() == 10  # still 10: active scan jobs are de-duplicated
+    assert len(db.scalars(select(Job).where(Job.type == JobType.SCAN_CREATOR)).all()) == 10
+
+    import app.worker.tasks as tasks
+
+    original = tasks.youtube_client
+    tasks.youtube_client = lambda _db: many.client()
+    from app.db import SessionLocal
+    from app.services import queue
+
+    try:
+        while True:
+            with SessionLocal() as s:
+                job = queue.claim_next(s, "sched-test", job_types=[JobType.SCAN_CREATOR])
+            if job is None:
+                break
+            worker.run_job(job)
+    finally:
+        tasks.youtube_client = original
+    db.expire_all()
+    assert all(j.status == JobStatus.COMPLETED for j in db.scalars(select(Job).where(Job.type == JobType.SCAN_CREATOR)))
+    assert len(db.scalars(select(Job).where(Job.type == JobType.ANALYZE_VIDEO)).all()) == 10
+    assert due_creators(db, load_settings(db)) == []  # all scanned; next check after the interval
+
+
+def test_add_video_by_url(db, stub):
+    creator = _creator(db, stub)
+    vid = next(iter(stub.videos))
+    video = add_video_by_url(db, stub.client(), f"https://youtu.be/{vid}", RuntimeSettings())
+    assert video.creator_id == creator.id and video.duration_seconds
     assert video.status == VideoStatus.QUEUED
-    assert db.scalar(select(Job).where(Job.video_id == video.id)) is not None
-    # idempotent
-    again = add_video_by_url(db, yt, "dQw4w9WgXcQ", RuntimeSettings())
+    again = add_video_by_url(db, stub.client(), vid, RuntimeSettings())
     assert again.id == video.id
     assert len(db.scalars(select(Job)).all()) == 1
+    # without an API key the public oEmbed endpoint provides the title
+    other = list(stub.videos)[1]
+    v2 = add_video_by_url(db, stub.client(api_key=None), other, RuntimeSettings())
+    assert v2.title == stub.videos[other].title
 
 
-def test_due_creators(db):
+def test_due_creators(db, stub):
     rs = load_settings(db)
-    c1 = upsert_creator(db, ChannelInfo("UCdue000000000000000001", "A"))
-    c2 = upsert_creator(db, ChannelInfo("UCdue000000000000000002", "B"))
+    c1 = _creator(db, stub)
+    c2 = _creator(db, stub, ch=BANK)
     c2.last_scanned_at = utcnow()
     db.commit()
-    due = due_creators(db, rs)
-    assert [c.id for c in due] == [c1.id]
+    assert [c.id for c in due_creators(db, rs)] == [c1.id]

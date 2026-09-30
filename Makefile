@@ -11,6 +11,7 @@ setup: ## Install backend (venv) + frontend dependencies
 	cd frontend && npm install
 	@test -f .env || cp .env.example .env
 	@mkdir -p data/inbox
+	@if [ -d .git ]; then $(MAKE) -s hooks; fi
 	@echo "✔ Setup klaar. Vul je API keys in .env in (of later via Settings) en start met: make dev"
 
 dev: ## Run API + worker + dashboard locally (Ctrl+C stops all)
@@ -31,7 +32,16 @@ demo: ## Load a demo video + clips (no API keys needed)
 migrate: ## Apply database migrations
 	cd backend && .venv/bin/python -m app.migrate
 
+secrets: ## Check that no API keys/secrets are tracked by Git
+	python3 scripts/check_secrets.py
+
+hooks: ## Install a git pre-commit hook that blocks commits containing secrets
+	@printf '#!/bin/sh\nexec python3 scripts/check_secrets.py --staged\n' > .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "✔ Pre-commit secret check geïnstalleerd"
+
 test: ## Backend tests + frontend lint/build
+	python3 scripts/check_secrets.py
 	cd backend && .venv/bin/ruff check app tests && .venv/bin/pytest -q
 	cd frontend && npx eslint . && npm run build
 

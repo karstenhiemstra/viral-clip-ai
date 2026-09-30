@@ -1,4 +1,4 @@
-"""Stage 1 - candidate generation (recall).
+"""Pass 1 (stage 1) - candidate generation (recall).
 
 Two independent generators are merged:
 * signal windows - sliding windows scored on audio peaks, audience hotspots and lexical hooks
@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.ai.llm import LLMClient, LLMError, UsageMeter
+from app.ai.llm import LLMClient, LLMError, LLMFatalError, UsageMeter
 from app.ai.prompts import CANDIDATE_SCHEMA, CANDIDATE_SYSTEM, candidate_user_prompt
 from app.ai.signals import VideoContext, signal_score, window_features
 from app.ai.transcript import contains_outro, is_filler_sentence
@@ -155,6 +155,8 @@ def llm_candidates(
                 system=CANDIDATE_SYSTEM, user=prompt, schema=CANDIDATE_SCHEMA, schema_name="moments", tier="fast",
                 max_tokens=4000,
             )
+        except LLMFatalError:
+            raise
         except LLMError as e:
             log.warning("Candidate pass failed for chunk %s: %s", ci, e)
             if warnings is not None:

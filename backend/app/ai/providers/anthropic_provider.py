@@ -14,31 +14,66 @@ from typing import Any
 
 import anthropic
 
-from app.ai.llm import ImageInput, LLMError, LLMRefusal, LLMResult, LLMUsage, estimate_cost, parse_json_loose
+from app.ai.llm import (
+    ImageInput,
+    LLMError,
+    LLMFatalError,
+    LLMRefusal,
+    LLMResult,
+    LLMUsage,
+    estimate_cost,
+    parse_json_loose,
+    resolve_models,
+)
 
 log = logging.getLogger(__name__)
 
 DEFAULT_FAST = "claude-haiku-4-5"
-DEFAULT_SMART = "claude-opus-5-5"
+DEFAULT_SMART = "claude-sonnet-5-5"
 
 # Models that accept output_config.effort (Haiku 4.5 does not).
 _EFFORT_PREFIXES = ("claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8", "claude-opus-4-7")
 # Models that accept server-side fallbacks="default" (beta).
 _FALLBACK_MODELS = ("claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1")
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+# If a key cannot use a model (retired, not enabled for the org) try the next one instead of failing.
+MODEL_FALLBACKS: dict[str, tuple[str, ...]] = {
+    "claude-opus-5-5": ("claude-sonnet-5-5", "claude-haiku-4-5"),
+    "claude-sonnet-5-5": ("claude-sonnet-5", "claude-haiku-4-5"),
+}
 
 
 class AnthropicProvider:
     provider = "anthropic"
 
-    def __init__(self, api_key: str, fast: str = "", smart: str = "", vision: str = ""):
+    def __init__(
+        self,
+        api_key: str,
+        fast: str = "",
+        smart: str = "",
+        vision: str = "",
+        models: dict[str, str] | None = None,
+        efforts: dict[str, str | None] | None = None,
+    ):
         self.client = anthropic.Anthropic(api_key=api_key, max_retries=3, timeout=300.0)
-        self.models = {
-            "fast": fast or DEFAULT_FAST,
-            "smart": smart or DEFAULT_SMART,
-            "vision": vision or smart or DEFAULT_SMART,
-        }
+        if models is None:
+            models, preset_efforts = resolve_models("anthropic", "balanced", fast, smart, vision)
+            efforts = efforts or preset_efforts
+        self.models = dict(models)
+        self.efforts = dict(efforts or {})
         self._disabled: set[str] = set()  # features the API rejected for this key/model
+        self._tried_fallbacks: set[str] = set()
+
+    def _switch_model(self, model: str, error: Exception) -> bool:
+        for alt in MODEL_FALLBACKS.get(model, ()):
+            if alt not in self._tried_fallbacks:
+                self._tried_fallbacks.add(alt)
+                log.warning("Anthropic model %s niet beschikbaar (%s); overgeschakeld naar %s", model, error, alt)
+                for t, m in list(self.models.items()):
+                    if m == model:
+                        self.models[t] = alt
+                return True
+        return False
 
     def complete_json(
         self,
@@ -69,7 +104,7 @@ class AnthropicProvider:
         if "format" not in self._disabled:
             output_config["format"] = {"type": "json_schema", "schema": schema}
         if model.startswith(_EFFORT_PREFIXES) and "effort" not in self._disabled:
-            output_config["effort"] = "low" if tier == "fast" else "medium"
+            output_config["effort"] = self.efforts.get(tier) or ("low" if tier == "fast" else "medium")
         if output_config:
             kwargs["output_config"] = output_config
         if "format" in self._disabled:
@@ -97,13 +132,28 @@ class AnthropicProvider:
                     system=system, user=user, schema=schema, schema_name=schema_name, tier=tier,
                     max_tokens=max_tokens, images=images,
                 )
+            if "credit balance" in msg:
+                raise LLMFatalError(
+                    "Je Anthropic-tegoed is op. Ga naar console.anthropic.com → Settings → Billing en voeg tegoed "
+                    "toe. Tot die tijd gebruikt de app de gratis heuristische analyse."
+                ) from e
             raise LLMError(f"Anthropic request geweigerd: {e}") from e
         except anthropic.AuthenticationError as e:
-            raise LLMError("Ongeldige ANTHROPIC_API_KEY") from e
+            raise LLMFatalError(
+                "Ongeldige ANTHROPIC_API_KEY. Maak een nieuwe key op console.anthropic.com → API Keys en zet die in "
+                "Instellingen of .env."
+            ) from e
+        except (anthropic.NotFoundError, anthropic.PermissionDeniedError) as e:
+            if self._switch_model(model, e):
+                return self.complete_json(
+                    system=system, user=user, schema=schema, schema_name=schema_name, tier=tier,
+                    max_tokens=max_tokens, images=images,
+                )
+            raise LLMFatalError(f"Anthropic: geen toegang tot model {model}. Kies een ander model in Instellingen → AI. ({e})") from e
         except anthropic.APIStatusError as e:
             raise LLMError(f"Anthropic API fout {e.status_code}: {e}") from e
         except anthropic.APIConnectionError as e:
-            raise LLMError(f"Anthropic API niet bereikbaar: {e}") from e
+            raise LLMFatalError(f"Anthropic API niet bereikbaar (internet/firewall?): {e}") from e
 
         usage = resp.usage
         in_tok = int(getattr(usage, "input_tokens", 0) or 0)
@@ -111,8 +161,8 @@ class AnthropicProvider:
         cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
         out_tok = int(getattr(usage, "output_tokens", 0) or 0)
         served_model = getattr(resp, "model", model) or model
-        # Cache reads bill at ~0.1x, cache writes at ~1.25x of the input price.
-        cost = estimate_cost(served_model, in_tok, out_tok) + estimate_cost(served_model, int(cache_read * 0.1 + cache_write * 1.25), 0)
+        # Cache reads bill at the cached rate, cache writes (5-minute TTL) at 1.25x the input price.
+        cost = estimate_cost(served_model, in_tok + int(cache_write * 1.25), out_tok, cache_read)
         llm_usage = LLMUsage(model=served_model, input_tokens=in_tok + cache_read + cache_write, output_tokens=out_tok, cost_usd=cost)
 
         if resp.stop_reason == "refusal":

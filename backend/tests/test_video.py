@@ -96,3 +96,30 @@ def test_load_profile_from_file(test_video):
     prof = load_profile(test_video)
     assert 29 <= prof.duration <= 31
     assert any(8.5 <= t <= 11.5 for t, _ in find_peaks(prof))
+
+
+def test_real_face_on_flat_background_is_tracked(tmp_path):
+    """Regression: global histogram equalisation washed faces out on flat backgrounds (-> no crop).
+
+    tests/fixtures/face.jpg is a crop of NASA's public-domain portrait of Eileen Collins.
+    """
+    from pathlib import Path
+
+    from app.video.reframe import plan_crop
+
+    face = Path(__file__).parent / "fixtures" / "face.jpg"
+    src = tmp_path / "flat.mp4"
+    # 1920x1080, flat background, face on the right for 3 s, then (scene cut) on the left for 3 s
+    ffmpeg.run([
+        "ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=0x2f4f6b:s=1920x1080:r=25:d=6",
+        "-loop", "1", "-i", str(face), "-filter_complex",
+        "[1:v]scale=380:380[f];[0:v][f]overlay=x='if(lt(t,3),1400,150)':y=300[v]",
+        "-map", "[v]", "-t", "6", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(src),
+    ])
+    plan = plan_crop(src, ffmpeg.probe(src), [(0.0, 6.0)], "auto", scene_cuts=[3.0])
+    assert plan.layout == "face"
+    xs = [x for _, x in plan.keyframes]
+    face_cx_right, face_cx_left = 1400 + 190, 150 + 190
+    assert abs(xs[0] + plan.crop_w / 2 - face_cx_right) < 200
+    assert abs(xs[-1] + plan.crop_w / 2 - face_cx_left) < 200
+    assert 2.5 <= plan.keyframes[-1][0] <= 3.5  # the crop follows the scene cut

@@ -6,6 +6,8 @@ Service. Source files come from allowed sources only:
 * upload through the dashboard (e.g. files a creator shares with you via their clipping program),
 * the inbox folder (``data/inbox``) - drop ``Anything [VIDEO_ID].mp4`` there, e.g. from a synced
   Google Drive/Dropbox folder the creator shares, and it is matched automatically,
+* a share link from the rights holder (Google Drive, Dropbox, WeTransfer-style direct links),
+  see ``app.services.remote_media``,
 * your own channel's content.
 
 Transcripts can also be uploaded directly (SRT/VTT) so a video can be analysed before the file arrives.
@@ -61,11 +63,33 @@ def attach_media(db: Session, video: Video, src: Path, origin: str, *, queue_ana
         video.duration_seconds = info.duration
     db.commit()
     woke = queue.wake_waiting_for_video(db, video.id)
-    if queue_analysis and not woke and video.status not in (VideoStatus.ANALYZING,):
-        from app.services.discovery import queue_video_analysis
+    if not queue_analysis or woke or video.status == VideoStatus.ANALYZING:
+        return video
+    if video.status == VideoStatus.ANALYZED and video.clips:
+        # Already analysed (e.g. from an uploaded transcript): render the clips we have instead of paying
+        # for a second AI analysis. "Opnieuw analyseren" in the dashboard forces a fresh analysis.
+        render_existing_clips(db, video)
+        return video
+    from app.services.discovery import queue_video_analysis
 
-        queue_video_analysis(db, video, priority=85)
+    queue_video_analysis(db, video, priority=85)
     return video
+
+
+def render_existing_clips(db: Session, video: Video) -> int:
+    from app.models import ClipStatus, JobType
+
+    n = 0
+    for clip in video.clips:
+        if clip.status in (ClipStatus.AWAITING_MEDIA, ClipStatus.FAILED, ClipStatus.PENDING_RENDER):
+            clip.status = ClipStatus.PENDING_RENDER
+            queue.enqueue(
+                db, JobType.RENDER_CLIP, clip_id=clip.id, video_id=video.id, priority=70 + int(clip.viral_score / 10),
+                title=f"Render #{clip.rank} — {video.title}"[:300], commit=False,
+            )
+            n += 1
+    db.commit()
+    return n
 
 
 def import_subtitles(db: Session, video: Video, text: str, filename: str, *, queue_analysis: bool = True) -> Transcript:

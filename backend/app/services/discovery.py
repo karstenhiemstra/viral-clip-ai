@@ -1,10 +1,17 @@
 """Creator management + new-video discovery + metadata pre-filtering.
 
-Scanning strategy (cheap first):
-1. Public RSS feed (0 quota) for the latest ~15 uploads.
-2. uploads-playlist paging (1 unit / 50 videos) only when a longer period is requested.
-3. videos.list (1 unit / 50 videos) for duration + statistics of *new* ids only.
-4. commentThreads.list (1 unit) only for videos that pass the filters -> crowd hotspots.
+Scanning strategy (official YouTube Data API v3 first, cheap everywhere):
+1. uploads playlist via playlistItems.list (1 unit / 50 videos). Paging stops as soon as the uploads
+   are older than the requested period. Without an API key (or if the API fails) the public channel
+   RSS feed (latest ~15 uploads, 0 quota) is used as a fallback.
+2. videos.list (1 unit / 50 videos) for duration + statistics of the videos we consider.
+3. commentThreads.list (1 unit) only for videos that pass the filters -> audience hotspots.
+
+Two modes:
+* automatic (scheduler): only videos we have never seen are considered - an analysed video is never
+  processed again;
+* manual fetch ("Video's ophalen" with a period + number of videos): also reconsiders this creator's
+  earlier discovered-but-not-analysed videos, e.g. when you widen the period from 7 to 30 days.
 """
 
 from __future__ import annotations
@@ -216,7 +223,18 @@ class ScanResult:
     new: int = 0
     queued: int = 0
     skipped: int = 0
+    source: str = ""
     errors: list[str] = field(default_factory=list)
+
+
+# Skip reasons set by the filters (these videos may be reconsidered by a manual fetch).
+AUTO_SKIP_PREFIXES = ("Buiten", "Korter", "Langer", "Minder", "Titel", "YouTube Short", "Livestream", "Niet gekozen")
+
+
+def _is_reconsiderable(video: Video) -> bool:
+    if video.status == VideoStatus.DISCOVERED:
+        return True
+    return video.status == VideoStatus.SKIPPED and (video.skip_reason or "").startswith(AUTO_SKIP_PREFIXES)
 
 
 def scan_creator(
@@ -225,63 +243,91 @@ def scan_creator(
     yt: YouTubeClient,
     rs: RuntimeSettings,
     progress: Callable[[float, str], None] | None = None,
+    *,
+    period: str | None = None,
+    max_videos: int | None = None,
+    manual: bool = False,
 ) -> ScanResult:
-    ds = rs.discovery
+    """Find new uploads of one creator, filter them on metadata and queue the best for analysis.
+
+    ``period`` / ``max_videos`` override the global discovery settings for this run (manual fetch).
+    """
+    overrides: dict = {}
+    if period:
+        overrides["period"] = period
+    if max_videos is not None:
+        overrides["max_videos_per_scan"] = max_videos
+    ds = rs.discovery.model_copy(update=overrides) if overrides else rs.discovery
     result = ScanResult()
     report = progress or (lambda pct, msg: None)
+    start, _ = period_cutoff(ds)
 
-    report(5, "Nieuwe uploads ophalen (RSS)")
-    feed: list[VideoInfo] = []
-    try:
-        feed = yt.fetch_rss(creator.youtube_channel_id)
-    except YouTubeError as e:
-        result.errors.append(str(e))
-    ids = [v.video_id for v in feed]
-    wants_history = ds.period in ("30d", "all", "custom") or ds.max_videos_per_scan == 0 or ds.max_videos_per_scan > 15
-    if yt.has_key and (not feed or wants_history):
-        report(15, "Uploads-playlist ophalen")
+    # 1. List uploads (official API first, RSS as fallback) -------------------------------------
+    entries: list[tuple[str, datetime | None]] = []
+    rss_info: dict[str, VideoInfo] = {}
+    if yt.has_key:
+        report(5, "Uploads ophalen via YouTube Data API")
         playlist = creator.uploads_playlist_id or uploads_playlist_for(creator.youtube_channel_id)
+        cap = 200 if ds.period == "all" else 100
         try:
-            limit = 200 if ds.period == "all" else 50
-            for vid in yt.list_upload_ids(playlist, max_items=limit):
-                if vid not in ids:
-                    ids.append(vid)
+            entries = yt.list_uploads(playlist, max_items=cap, published_after=start)
+            result.source = "api"
         except YouTubeError as e:
             result.errors.append(str(e))
+    if not result.source:
+        report(5, "Uploads ophalen via RSS-feed")
+        try:
+            feed = yt.fetch_rss(creator.youtube_channel_id)
+            rss_info = {v.video_id: v for v in feed}
+            entries = [(v.video_id, v.published_at) for v in feed]
+            result.source = "rss"
+        except YouTubeError as e:
+            result.errors.append(str(e))
+    ids = [vid for vid, _ in entries]
     result.found = len(ids)
 
-    known = set(db.scalars(select(Video.youtube_video_id).where(Video.youtube_video_id.in_(ids))).all()) if ids else set()
-    new_ids = [i for i in ids if i not in known]
+    # 2. New vs. known videos ------------------------------------------------------------------------
+    existing = {v.youtube_video_id: v for v in db.scalars(select(Video).where(Video.youtube_video_id.in_(ids))).all()} if ids else {}
+    new_ids = [i for i in ids if i not in existing]
     result.new = len(new_ids)
+    reconsider = [v for v in existing.values() if manual and v.creator_id == creator.id and _is_reconsiderable(v)]
 
-    infos: dict[str, VideoInfo] = {v.video_id: v for v in feed}
-    if new_ids and yt.has_key:
-        report(30, f"Metadata ophalen voor {len(new_ids)} video's")
+    # 3. Metadata (duration, views, ...) for everything we are going to judge ------------------------
+    infos: dict[str, VideoInfo] = dict(rss_info)
+    wanted = new_ids + [v.youtube_video_id for v in reconsider]
+    if wanted and yt.has_key:
+        report(25, f"Metadata ophalen voor {len(wanted)} video's")
         try:
-            for info in yt.get_videos(new_ids):
-                rss = infos.get(info.video_id)
+            for info in yt.get_videos(wanted):
+                rss = rss_info.get(info.video_id)
                 if rss is not None and rss.is_short:
                     info.is_short = True
                 infos[info.video_id] = info
         except YouTubeError as e:
             result.errors.append(str(e))
 
-    new_videos: list[Video] = []
+    pool: list[Video] = []
     for vid in new_ids:
         info = infos.get(vid)
         if info is None:
-            continue
+            # Listed but no metadata (e.g. API hiccup): keep the id so it is picked up next time.
+            published = dict(entries).get(vid)
+            info = VideoInfo(video_id=vid, title=f"YouTube video {vid}", published_at=published)
         video = Video(youtube_video_id=vid, creator_id=creator.id, source="discovery", status=VideoStatus.DISCOVERED)
         _apply_info(video, info)
         db.add(video)
-        new_videos.append(video)
+        pool.append(video)
+    for video in reconsider:
+        if video.youtube_video_id in infos:
+            _apply_info(video, infos[video.youtube_video_id])
+        pool.append(video)
     db.flush()
 
-    # Filter + rank
-    report(50, "Video's filteren")
+    # 4. Filter + rank ----------------------------------------------------------------------------------
+    report(45, "Video's filteren op periode, lengte en type")
     baseline = creator_baseline_vph(db, creator.id)
     passed: list[Video] = []
-    for video in new_videos:
+    for video in pool:
         reason = check_video(video, ds, creator)
         if reason:
             video.status = VideoStatus.SKIPPED
@@ -290,15 +336,20 @@ def scan_creator(
         else:
             video.prescore, video.prescore_details = compute_prescore(video, creator, baseline)
             passed.append(video)
-    passed.sort(key=lambda v: v.prescore or 0, reverse=True)
+    # Most promising first (over-performance, engagement, recency, creator priority); newest breaks ties.
+    passed.sort(key=lambda v: (v.prescore or 0, v.published_at or datetime.min), reverse=True)
     limit = ds.max_videos_per_scan or len(passed)
     for video in passed[limit:]:
         video.status = VideoStatus.DISCOVERED
-        video.skip_reason = "Buiten top-N van deze scan"
+        video.skip_reason = f"Niet gekozen (buiten top {limit} van deze scan)"
     selected = passed[:limit]
+    # Never hold a write transaction during network calls: with SQLite that would block the progress
+    # and quota bookkeeping (separate connections) until the lock times out.
+    db.commit()
 
+    # 5. Audience hotspots + queue -------------------------------------------------------------------------
     for i, video in enumerate(selected):
-        report(60 + 35 * i / max(1, len(selected)), f"Comments analyseren: {video.title[:60]}")
+        report(55 + 40 * i / max(1, len(selected)), f"Comments analyseren: {video.title[:60]}")
         if ds.fetch_comments and yt.has_key and (video.comment_count or 0) > 0:
             try:
                 comments = yt.get_top_comments(video.youtube_video_id)
@@ -306,8 +357,9 @@ def scan_creator(
             except YouTubeError as e:
                 result.errors.append(str(e))
             video.prescore, video.prescore_details = compute_prescore(video, creator, baseline)
-        if creator.auto_analyze and rs.pipeline.auto_analyze:
+        if manual or (creator.auto_analyze and rs.pipeline.auto_analyze):
             video.status = VideoStatus.QUEUED
+            video.skip_reason = None
             queue.enqueue(
                 db,
                 JobType.ANALYZE_VIDEO,
@@ -318,12 +370,18 @@ def scan_creator(
                 commit=False,
             )
             result.queued += 1
+        else:
+            video.status = VideoStatus.DISCOVERED
+            video.skip_reason = "Klaar om te analyseren (automatisch analyseren staat uit)"
+        db.commit()
 
-    # Creator bookkeeping
-    latest = max((infos[i] for i in ids if i in infos and infos[i].published_at), key=lambda v: v.published_at, default=None)
-    if latest is not None:
-        creator.last_video_published_at = latest.published_at
-        creator.last_video_title = latest.title
+    # 6. Creator bookkeeping ---------------------------------------------------------------------------------
+    dated = [(vid, pub) for vid, pub in entries if pub is not None]
+    if dated:
+        latest_id, latest_pub = max(dated, key=lambda e: e[1])
+        creator.last_video_published_at = latest_pub
+        latest_video = infos.get(latest_id)
+        creator.last_video_title = latest_video.title if latest_video else (existing.get(latest_id).title if latest_id in existing else creator.last_video_title)
     if yt.has_key:
         try:
             chans = yt.get_channels([creator.youtube_channel_id])
@@ -337,10 +395,10 @@ def scan_creator(
             result.errors.append(str(e))
     creator.last_scanned_at = utcnow()
     creator.last_scan_new_videos = result.new
-    creator.last_scan_status = "error" if result.errors and not ids else ("warning" if result.errors else "ok")
-    creator.last_scan_error = "; ".join(result.errors)[:2000] or None
+    creator.last_scan_status = "error" if result.errors and not result.source else ("warning" if result.errors else "ok")
+    creator.last_scan_error = "; ".join(dict.fromkeys(result.errors))[:2000] or None
     db.commit()
-    report(99, f"{result.new} nieuw, {result.queued} in wachtrij")
+    report(99, f"{result.new} nieuw, {result.queued} in analysewachtrij")
     return result
 
 

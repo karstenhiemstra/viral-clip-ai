@@ -2,58 +2,250 @@
 
 **Vindt automatisch de momenten met het hoogste viral potential in lange YouTube-video's en zet ze klaar als verticale TikTok/Reels/Shorts-clips (9:16, captions, 12–18 sec).**
 
-Je voegt creators toe (bijv. Enzo Knol, Bankzitters, Hanwe, Gio, StukTV — of elk ander kanaal). ViralClip AI controleert elke 2 uur op nieuwe uploads, filtert ze op metadata, analyseert transcript + audio, laat een AI denken als *een TikTok-kijker die aan het scrollen is*, rankt de momenten met een eigen **Viral Score (0–100)**, verwijdert dubbele momenten, bepaalt hook-first start- en eindpunten, rendert een verticale clip met captions en zet alles in een dashboard met preview, uitleg en downloadknop. Jouw feedback (🔥 / 👍 / 👎 / ❌) en echte TikTok-statistieken trainen een persoonlijk model dat de score bijstuurt.
+Je voegt creators toe (bijv. Enzo Knol, Bankzitters, Hanwe, Gio, StukTV — of elk ander kanaal). ViralClip AI controleert elke 2 uur of er nieuwe video's zijn, kiest de interessantste, analyseert het transcript en de audio, laat een AI denken als *een TikTok-kijker die aan het scrollen is*, geeft elk moment een **Viral Score (0–100)**, verwijdert dubbele momenten, kiest een start die meteen pakt (hook-first), rendert een verticale clip met captions en zet alles in een dashboard met preview, uitleg en downloadknop. Jouw feedback (🔥 / 👍 / 👎 / ❌) traint een persoonlijk model dat de score bijstuurt.
 
-> ⚠️ De Viral Score is een **voorspelling** op basis van kenmerken — nooit een garantie. De UI spreekt daarom van *"High viral potential"* en *"Viral Score 94/100"*, nooit van *"deze video gaat viral"*.
+> ⚠️ De Viral Score is een **voorspelling** op basis van kenmerken — nooit een garantie. De app zegt daarom *"High viral potential"* en *"Viral Score: 94/100"*, nooit *"deze video gaat viral"*.
 
 ---
 
 ## Inhoud
 
-1. [Wat het project doet](#1-wat-het-project-doet)
-2. [Architectuur](#2-architectuur)
-3. [Installatie](#3-installatie)
-4. [Dependencies](#4-dependencies)
-5. [API keys](#5-api-keys)
-6. [Database setup](#6-database-setup)
-7. [Environment variables](#7-environment-variables)
-8. [Lokale development](#8-lokale-development)
-9. [YouTube API setup](#9-youtube-api-setup)
-10. [AI API setup & kosten](#10-ai-api-setup--kosten)
-11. [Video processing](#11-video-processing)
-12. [Deployment](#12-deployment)
-13. [Troubleshooting](#13-troubleshooting)
-14. [Kritische ontwerpkeuzes](#14-kritische-ontwerpkeuzes-waar-ik-afweek-van-het-oorspronkelijke-plan)
-15. [Juridisch](#15-juridisch-youtube-terms-of-service)
-16. [Roadmap](#16-roadmap)
+- [Snel starten in 11 stappen (geen technische kennis nodig)](#snel-starten-in-11-stappen)
+- [Welke API keys heb je nodig?](#welke-api-keys-heb-je-nodig)
+- [Waarom moet ik de video zelf aanleveren?](#waarom-moet-ik-de-video-zelf-aanleveren)
+- [Hoe kiest de app de clips? (eerlijk: wat is AI en wat niet)](#hoe-kiest-de-app-de-clips)
+- [Wat kost het?](#wat-kost-het)
+- [Automatisch volgen van creators](#automatisch-volgen-van-creators)
+- [Beveiliging](#beveiliging)
+- [Voor ontwikkelaars](#voor-ontwikkelaars) — architectuur, lokaal draaien, tests, database, deployment
+- [Problemen oplossen](#problemen-oplossen)
+- [Ontwerpkeuzes & juridisch](#ontwerpkeuzes)
 
 ---
 
-## 1. Wat het project doet
+## Snel starten in 11 stappen
 
-| Functie | Status |
+Je hebt nodig: een computer (Windows, Mac of Linux) en ongeveer 20 minuten.
+
+### STAP 1 — Installeer Docker Desktop
+Ga naar [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/), klik op **Download** voor jouw systeem, installeer het en start Docker Desktop (wacht tot linksonder "Engine running" staat).
+
+### STAP 2 — Download ViralClip AI
+Klik op deze GitHub-pagina op de groene knop **Code** → **Download ZIP**, pak het ZIP-bestand uit en open een terminal in die map
+(Mac: rechtsklik op de map → *Nieuwe terminal bij map*; Windows: open de map, klik in de adresbalk, typ `powershell` en druk op Enter).
+
+Heb je Git? **Voer dit commando uit:**
+```bash
+git clone https://github.com/karstenhiemstra/viral-clip-ai.git
+cd viral-clip-ai
+```
+
+### STAP 3 — Maak je instellingenbestand
+**Voer dit commando uit:**
+```bash
+cp .env.example .env
+```
+Er staat nu een bestand `.env` in de map. Open het met Kladblok / TextEdit. Hier komen je API keys in (stap 4–6). Dit bestand gaat **nooit** naar GitHub.
+
+### STAP 4 — Maak de YouTube API key aan (gratis, nodig)
+1. Ga naar [console.cloud.google.com](https://console.cloud.google.com/) en log in met je Google-account.
+2. Klik bovenaan op de projectkiezer → **Nieuw project** → naam `viralclip` → **Maken**.
+3. Ga naar [de YouTube Data API v3-pagina](https://console.cloud.google.com/apis/library/youtube.googleapis.com) en klik op **Inschakelen**.
+4. Klik links op **Credentials / Inloggegevens** → **+ Create credentials / Inloggegevens maken** → **API key** en kopieer de key.
+5. Zet hem in `.env` achter `YOUTUBE_API_KEY=`, bijvoorbeeld: `YOUTUBE_API_KEY=AIza...`
+
+### STAP 5 — Maak de OpenAI API key aan (aanbevolen, betaald)
+1. Ga naar [platform.openai.com/api-keys](https://platform.openai.com/api-keys) en log in (of maak een account).
+2. Klik op **Create new secret key** → geef een naam → **Create secret key** en kopieer de key (je ziet hem maar één keer).
+3. Ga naar [Settings → Billing](https://platform.openai.com/settings/organization/billing/overview) en klik op **Add payment details**; zet er bijv. **$5** tegoed op (genoeg voor tientallen video's, zie [kosten](#wat-kost-het)).
+4. Zet de key in `.env` achter `OPENAI_API_KEY=`.
+
+Geen key? Dan werkt de app ook, met een gratis maar minder slimme rekenmethode (zie [heuristiek](#zonder-ai-key-heuristische-modus)).
+
+### STAP 6 — Kies een wachtwoord voor het dashboard (aanbevolen)
+Vul in `.env` bij `DASHBOARD_PASSWORD=` een wachtwoord in. Je logt dan in met gebruikersnaam `admin`. Sla `.env` op.
+
+### STAP 7 — Start de app
+**Voer dit commando uit:**
+```bash
+docker compose up -d --build
+```
+De eerste keer duurt dit 5–10 minuten. Daarna start hij in een paar seconden.
+
+### STAP 8 — Open het dashboard
+Ga in je browser naar **http://localhost:3000**. Bovenaan staat een checklist *"Aan de slag"* die je door de rest leidt.
+Keys kun je ook hier invullen of testen: **Settings → API keys** → plak de key → **Opslaan** → **Test**.
+
+### STAP 9 — Voeg een creator toe
+Klik links op **Creators** → **Creator toevoegen** → typ `Enzo Knol` → **Zoek**. Kies onder *"Direct ophalen na toevoegen"* een periode (**laatste 24 uur / 7 dagen / 30 dagen**) en een aantal (**5 / 10 / 25 video's**) en klik bij het juiste kanaal op **Kies**. Later opnieuw ophalen: knop **Video's ophalen** in de lijst.
+
+### STAP 10 — Lever de bronvideo aan
+Klik links op **Videos** en open een video met status *"Wacht op bron"*. Kies één van:
+- **Upload bron** — het MP4-bestand (bijv. uit het clipping-programma van de creator of je eigen video);
+- **Bron via link** — een deel-link van Google Drive, Dropbox of OneDrive;
+- **Transcript (SRT/VTT)** — ondertitels; de analyse start dan al, renderen volgt zodra het videobestand er is;
+- of zet het bestand in de map `data/inbox/` met het YouTube-video-ID in de naam, bijv. `vlog [dQw4w9WgXcQ].mp4`.
+
+De analyse start automatisch; volg hem op **Analysis Queue**.
+
+### STAP 11 — Bekijk en download je clips
+Op het **Dashboard** zie je *"🔥 3 new potential viral clips"* en per creator de beste clip (bijv. *Enzo Knol · 84*). Klik op een clip → bekijk de preview en de uitleg → **Download Clip**. Geef feedback met 🔥 Viral / 👍 Good / 👎 Bad / Reject: daarmee leert de app jouw smaak.
+
+**Stoppen:** `docker compose down` · **Bijwerken:** `git pull` en daarna `docker compose up -d --build` · **Logs bekijken:** `docker compose logs -f worker`
+
+---
+
+## Welke API keys heb je nodig?
+
+| Key | Nodig? | Waarvoor | Kosten | Waar zet je hem |
+|---|---|---|---|---|
+| **YouTube Data API v3** | **Ja** | Creators zoeken, nieuwe video's vinden, metadata, comment-tijdstempels | Gratis (10.000 units/dag, je gebruikt er ~400) | `.env` → `YOUTUBE_API_KEY=` of Settings |
+| **OpenAI** | Aanbevolen | Transcriptie (Whisper) **én** de slimme clipselectie (GPT-5) — één key voor alles | Betaald, ca. $0,15–0,55 per video | `.env` → `OPENAI_API_KEY=` of Settings |
+| Anthropic (Claude) | Nee, weglaten | Alternatief voor OpenAI als je liever Claude gebruikt. Kan **niet** transcriberen | Betaald | `.env` → `ANTHROPIC_API_KEY=` |
+
+**Advies: gebruik alleen YouTube + OpenAI.** Eén betaalde provider is genoeg. Laat `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, alle `S3_*`-regels en `DATABASE_URL` leeg.
+
+Keys die je in **Settings** invult worden versleuteld opgeslagen en nooit naar de browser teruggestuurd; een key uit Settings wint van `.env`.
+
+---
+
+## Waarom moet ik de video zelf aanleveren?
+
+Omdat het **niet mag** om video's van YouTube te downloaden, en jij terecht vroeg om geen beveiligingen van YouTube te omzeilen:
+
+- De **officiële YouTube API** geeft titels, beschrijvingen, duur, views, likes en comments — maar **geen video, geen audio en geen ondertitels** van andermans video's (ondertitels downloaden kan alleen voor je eigen kanaal).
+- Zonder beeld of tekst kan geen enkele tool de momenten vinden. Daarom lever je de bron aan via een toegestane route: upload, deel-link, inbox-map of ondertitelbestand. Veel grote creators hebben een clipping-programma dat precies deze bestanden aanlevert.
+
+Wat de app **wel** volledig automatisch doet: nieuwe video's vinden, filteren en prioriteren, comment-tijdstempels verzamelen ("1:02 de pan 😂"), en zodra het bestand er is: transcriberen, analyseren, scoren, renderen. Een video die al geanalyseerd is, wordt nooit opnieuw verwerkt (ook niet als je opnieuw scant), tenzij je zelf op *Opnieuw analyseren* klikt.
+
+---
+
+## Hoe kiest de app de clips?
+
+### De stappen
+
+```
+1. Nieuwe video gevonden (YouTube API)  → filter: periode, lengte, Shorts/livestreams, titelwoorden
+2. Prioriteit per video                 → views t.o.v. kanaalgemiddelde, engagement, recentheid, comment-tijdstempels
+3. Transcript met woord-timestamps     → Whisper (OpenAI) of je eigen .srt/.vtt
+4. Signalen (lokaal, gratis)            → zinnen, luidheidspieken (gelach/geschreeuw), stiltes, camerawissels
+5. PASS 1  goedkoop model (gpt-5-mini)  → leest het HELE transcript en stelt ~30–50 momenten voor
+6. PASS 2  lokaal, gratis               → voegt AI-momenten en signaal-momenten samen, verwijdert dubbelingen,
+                                           houdt de beste ~30 kandidaten over
+7. PASS 3  slim model (gpt-5)           → beoordeelt ALLEEN die ~30 kandidaten als "TikTok-scroller + editor":
+                                           12 scores, vlaggen (bijv. context nodig), oordeel, betere begin-/eindzin
+8. Clipgrenzen                          → begint bij de hook, repareert ontbrekende context, eindigt na de payoff,
+                                           haalt dode stiltes weg, 12–18 s (flexibel, bijv. 00:13:41.2 → 00:13:56.4)
+9. Viral Score                          → formule hieronder
+10. Dubbelingen weg + variatie (MMR)    → top 5 per video, beste bovenaan
+11. Render                              → 9:16 met gezicht-volgen, captions (3 stijlen), −14 LUFS → MP4 1080×1920
+```
+
+Het dure model ziet dus nooit het hele transcript, alleen de shortlist. Dat maakt het goedkoop.
+
+### De Viral Score-formule
+
+```
+Stop   = gewogen gemiddelde van  Hook ×1.6, Hook Strength ×1.3, Curiosity ×1.2        ("stopt iemand met scrollen?")
+Hold   = gewogen gemiddelde van  Retention ×1.5, Payoff ×1.3, Context ×1.2, Surprise, Emotion   ("kijkt hij door?")
+Engage = gewogen gemiddelde van  Shareability ×1.3, Comment Potential, Humor, Rewatch ×0.7        ("deelt/reageert hij?")
+
+Inhoud      = meetkundig gemiddelde van Stop (40%), Hold (35%), Engage (25%)
+Viral Score = (80% Inhoud + 20% signalen) × strafpunten + comment-bonus (max +6) + persoonlijke bijsturing
+              met een plafond per oordeel (skip ≤ 45, maybe ≤ 76, good ≤ 92)
+```
+
+- *Meetkundig* gemiddelde: een slechte hook kan niet worden goedgemaakt door deelbaarheid — net als op TikTok.
+- *Strafpunten*: sponsor/reclame ×0,55, intro/outro ×0,6, context nodig ×0,85, begint/eindigt midden in een zin ×0,93, zwakke payoff ×0,92.
+- Alle gewichten zijn aan te passen in **Settings → Viral Score**. Per clip zie je de volledige opbouw ("Score per factor" en "Waarom de AI deze clip koos").
+- Meer detail: [docs/ALGORITHM.md](docs/ALGORITHM.md).
+
+### Waar zit de AI precies?
+
+| Onderdeel | Wat gebruikt het | Waar in de code |
+|---|---|---|
+| Transcriptie | OpenAI **whisper-1** (API, in stukken van 20 min) · of lokaal **faster-whisper** · of jouw .srt/.vtt | `backend/app/ai/transcription.py` |
+| Pass 1 (momenten zoeken) | **gpt-5-mini** (reasoning low) · Claude: claude-haiku-4-5 | `backend/app/ai/candidates.py`, `prompts.py` |
+| Pass 2 (shortlist) | Geen AI: lokale code | `backend/app/ai/candidates.py` (`merge_candidates`) |
+| Pass 3 (beoordelen) | **gpt-5** (reasoning low; "Beste": medium) · Claude: claude-sonnet-5-5 / claude-opus-5-5 | `backend/app/ai/evaluator.py`, `prompts.py` |
+| Dubbelingen | OpenAI text-embedding-3-small, anders TF-IDF (lokaal) | `backend/app/ai/dedupe.py` |
+| Gezichten volgen | OpenCV (YuNet, anders Haar) — lokaal | `backend/app/video/reframe.py` |
+| Renderen & captions | ffmpeg + libass — lokaal | `backend/app/video/render.py`, `captions.py` |
+| Persoonlijk leren | Ridge-regressie op jouw beoordelingen — lokaal | `backend/app/services/learning.py` |
+| Beeldanalyse (vision) | Optioneel, standaard **uit** (beta), alleen de top-N | `backend/app/ai/vision.py` |
+
+**Kwaliteit/kosten** kies je in **Settings → AI & modellen**: *Budget* (gpt-5-mini voor alles), *Gebalanceerd* (aanbevolen) of *Beste kwaliteit*. Is een model niet beschikbaar voor jouw key, dan schakelt de app automatisch over naar het volgende (gpt-5 → gpt-5-mini → gpt-4.1). Is je tegoed op of je key ongeldig, dan zie je dat op het dashboard en gaat de analyse gratis verder met de heuristiek.
+
+### Zonder AI-key: heuristische modus
+
+Zonder OpenAI/Anthropic-key werkt alles, maar dan met vuistregels in plaats van een taalmodel: momenten komen uit luidheidspieken, comment-tijdstempels, scènewissels en "hook-woorden" (bijv. *wacht, wat?!*, vragen, uitroepen, getallen, emotiewoorden), en de 12 scores worden daaruit berekend. Dat is gratis en transparant, maar het **begrijpt geen humor of verhaal**. In de clipuitleg staat altijd welke modus is gebruikt (*Modus: heuristic* of *llm*).
+
+### Wat is (nog) niet gebouwd
+
+- Video's downloaden van YouTube: bewust niet (zie hierboven).
+- TikTok/Instagram-statistieken automatisch ophalen: je vult ze nu per clip in (*Prestaties na publicatie*).
+- Vision (beeldanalyse) staat standaard uit.
+
+---
+
+## Wat kost het?
+
+**YouTube API: gratis.** AI-kosten per video, geschat op basis van **gemeten** tokengebruik van deze app en de publieke prijslijst (september 2026; bron: LiteLLM-prijstabel). De marge komt door verborgen "denk"-tokens die per video verschillen.
+
+| Videolengte | OpenAI · Gebalanceerd (aanbevolen) | waarvan Whisper | Zelfde, met eigen .srt (geen Whisper) | OpenAI · Budget | OpenAI · Beste |
+|---|---|---|---|---|---|
+| 10 min | **$0,15 – 0,20** | $0,06 | $0,09 – 0,14 | $0,08 – 0,10 | $0,19 – 0,31 |
+| 30 min | **$0,28 – 0,34** | $0,18 | $0,10 – 0,16 | $0,21 – 0,23 | $0,32 – 0,45 |
+| 60 min | **$0,48 – 0,54** | $0,36 | $0,12 – 0,18 | $0,41 – 0,44 | $0,52 – 0,66 |
+
+Ter vergelijking, alleen Claude (transcriptie lokaal, gratis): Gebalanceerd $0,10–0,21, Beste (Opus) $0,28–0,57 per video.
+
+**Waar komt dat vandaan?**
+
+| Onderdeel | Gemeten tokens | Prijs (per 1M tokens) |
+|---|---|---|
+| Pass 1 — hele transcript | ~460 in + ~170 uit per videominuut | gpt-5-mini: $0,25 in / $2,00 uit |
+| Pass 3 — alleen ~30 kandidaten | ~10.500 in + ~4.500 uit per video (**onafhankelijk van de lengte**) | gpt-5: $1,25 in / $10,00 uit |
+| Transcriptie | per audiominuut | whisper-1: $0,006 per minuut |
+
+**Voorbeeld per maand:** 10 creators × 3 nieuwe video's per week van 20 minuten ≈ 130 video's × $0,21–0,27 ≈ **$27–35 per maand**. Levert de creator ondertitels (.srt) aan, dan ongeveer de helft.
+
+De werkelijke kosten worden per analyse bijgehouden (videopagina → *Laatste analyse*) en per dag op het dashboard. **Settings → AI & modellen** toont dezelfde tabel voor jouw instellingen.
+
+**Besparen:** kwaliteit *Budget*, minder kandidaten (Settings → Pipeline), minimale videolengte per creator, maximaal aantal video's per scan, ondertitels aanleveren.
+
+---
+
+## Automatisch volgen van creators
+
+- De worker kijkt standaard **elke 120 minuten** per creator of er nieuwe uploads zijn (Settings → Discovery). 10 creators is geen probleem: elke scan kost ~3 YouTube-quota-units (+1 per nieuwe video voor comments), dus ~400 van de 10.000 gratis units per dag.
+- Filters (globaal én per creator): periode (vandaag / 24 uur / 7 dagen / 30 dagen / eigen periode / alles), max. aantal video's per scan (5/10/25/50/alle), min./max. lengte, geen Shorts, geen livestreams, titelwoorden uitsluiten, minimale views.
+- Een video die al geanalyseerd is, wordt **nooit opnieuw** geanalyseerd door een scan. Een video die door een filter werd overgeslagen, kun je terughalen via **Video's ophalen** (dan worden de filters opnieuw toegepast).
+- Per creator: prioriteit (bepaalt de volgorde in de wachtrij), taal, clipduur, max. clips per video, automatisch analyseren aan/uit.
+
+---
+
+## Beveiliging
+
+| Maatregel | Hoe |
 |---|---|
-| Creators zoeken & toevoegen (naam, @handle of kanaal-URL) | ✅ |
-| Automatische scan op nieuwe uploads (standaard elke 2 uur) | ✅ |
-| Metadata-filters: periode, aantal video's, min/max lengte, views, Shorts/live, titelwoorden | ✅ |
-| Prioriteit per video (over-performance vs. kanaalgemiddelde, engagement, recency, creator-prioriteit) | ✅ |
-| **Audience hotspots**: tijdstempels die kijkers in YouTube-comments noemen ("3:42 😂") | ✅ |
-| Transcriptie met woord-timestamps (Whisper API, lokaal faster-whisper, of SRT/VTT-upload) | ✅ |
-| Audio-signalen: volume-pieken, reacties/gelach, stiltes, spreektempo; camerawissels | ✅ |
-| 10-staps selectie-algoritme met 12 scoringsdimensies en funnel-score | ✅ |
-| Hook-first clipgrenzen, 12–18 s, dode lucht eruit (jump cuts) | ✅ |
-| Duplicate-detectie (tijd-overlap + semantische gelijkenis, MMR) | ✅ |
-| 9:16 reframing: gezicht volgen, actieve spreker, split-screen, blur-fit | ✅ |
-| Captions: 3 presets (Dynamic TikTok-stijl, grote witte, minimalistisch), woord-gesynchroniseerd, niet over gezichten | ✅ |
-| Dashboard, Creators, Videos, Analysis Queue, Clips, Analytics, Settings | ✅ |
-| Feedback + performance tracking + persoonlijk leermodel met inzichten | ✅ |
-| Kosten- en quota-tracking per analyse en per dag | ✅ |
-| Optionele vision-analyse van alleen de beste kandidaten | ✅ (beta, standaard uit) |
-| Werkt zonder API keys (lokale heuristiek + demo) | ✅ |
+| **Geen secrets in Git** | `.env` en `data/` staan in `.gitignore`; `.env.example` bevat alleen lege waarden. `make secrets` en de CI-stap *Secret scan* stoppen als er iets op een API key lijkt; `make hooks` installeert dezelfde controle als pre-commit hook. |
+| API keys in de app | Versleuteld (Fernet) met `APP_SECRET_KEY` (automatisch aangemaakt in `data/.secret_key` als je hem leeg laat); de browser krijgt alleen `sk-…xyz` te zien. |
+| Dashboard-wachtwoord | `DASHBOARD_PASSWORD` → inlogvenster op alle pagina's én de API-proxy. |
+| API-token | `API_AUTH_TOKEN` → de API accepteert alleen verzoeken met `Authorization: Bearer …`; het dashboard voegt dit server-side toe (nooit in de browser of in URL's). |
+| Netwerk | Docker publiceert het dashboard en de API **alleen op 127.0.0.1**. Wil je er van buitenaf bij: eerst wachtwoord + token instellen, dan een reverse proxy met HTTPS (zie [deployment](#deployment)). |
+| Database | Docker: PostgreSQL is niet van buitenaf bereikbaar; zet `POSTGRES_PASSWORD` op iets sterks voor productie. |
+| CORS | Alleen `CORS_ORIGINS` (standaard `http://localhost:3000`); het dashboard gebruikt een same-origin proxy. |
+| Invoer | Pydantic-validatie op alle endpoints, bestandstype- en groottelimiet op uploads (`MAX_UPLOAD_GB`), SSRF-bescherming bij deel-links (geen interne adressen, geen YouTube-downloads). |
+| Headers | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`. |
 
-**Dagelijkse workflow:** creators toevoegen → ViralClip vindt nieuwe video's → jij levert (automatisch via de inbox-map) het bronbestand aan → je opent het Dashboard en ziet *"🔥 18 new potential viral clips"* → bekijken, 🔥/👍/👎 geven, **Download Clip**, posten.
+**Voor productie minimaal zetten:** `DASHBOARD_PASSWORD`, `API_AUTH_TOKEN`, `APP_SECRET_KEY`, `POSTGRES_PASSWORD`. Een sterke waarde maken: `python3 -c "import secrets;print(secrets.token_urlsafe(48))"`.
 
-## 2. Architectuur
+---
+
+## Voor ontwikkelaars
+
+### Architectuur
 
 ```mermaid
 flowchart LR
@@ -61,208 +253,107 @@ flowchart LR
     UI[Next.js dashboard]
   end
   UI -- same-origin /api/* --> PX[Next.js route handler<br/>proxy + auth + streaming]
-  PX --> API[FastAPI]
+  PX -- Bearer token --> API[FastAPI]
   API <--> DB[(PostgreSQL / SQLite)]
   API <--> ST[(Storage: lokaal of S3/R2/Supabase)]
   W[Worker] <--> DB
   W <--> ST
-  W -- RSS / Data API v3 --> YT[YouTube]
-  W -- pass 1 + 2 --> LLM[Claude / OpenAI / heuristiek]
+  W -- Data API v3 / RSS / oEmbed --> YT[YouTube]
+  W -- pass 1 + 3 --> LLM[OpenAI / Claude / heuristiek]
   W -- STT --> STT[Whisper API / faster-whisper]
   W -- ffmpeg + OpenCV --> R[Render 9:16 + captions]
-  INBOX[/data/inbox/] --> W
+  INBOX[/data/inbox/ · deel-links/] --> W
 ```
-
-**De analysepipeline** (`backend/app/ai/pipeline.py`):
-
-```
-YouTube-video (metadata + comments via officiële API)
- → bronbestand (upload / inbox) → transcript met woord-timestamps
- → zin-segmentatie + audio-luidheid + camerawissels + comment-hotspots        (lokaal, gratis)
- → Stage 1  kandidaten: signaal-vensters  +  LLM pass 1 (snel model)          → 30–50 momenten
- → Stage 2–7 LLM pass 2 (slim model): kijkersimulatie, 12 dimensies, vlaggen, verdict, betere edit
- → Stage 10 hook-first grenzen, context-reparatie, payoff-bewust einde, dode lucht eruit
- → Stage 9  Viral Score = funnel (Stop × Hold × Engage) + signalen + crowd + persoonlijk model
- → (optioneel) vision-check van de top N
- → Stage 8  duplicate-detectie + MMR-diversiteit → Top 5
- → render: 9:16 reframing + captions + loudness → mp4 + thumbnail
-```
-
-Het algoritme is in detail uitgelegd in **[docs/ALGORITHM.md](docs/ALGORITHM.md)**.
-
-**Repositorystructuur**
 
 ```
 viral-clip-ai/
 ├── backend/                  Python 3.11+ · FastAPI · SQLAlchemy 2 · Alembic
 │   ├── app/
-│   │   ├── ai/               transcriptie, signalen, kandidaten, prompts, LLM-providers, scoring,
-│   │   │                     evaluator, boundaries, dedupe, vision, pipeline
-│   │   ├── video/            ffmpeg-wrappers, audio-features, scènedetectie, reframing, captions, render
-│   │   ├── services/         YouTube, discovery, queue, storage, media/inbox, settings, learning, usage
+│   │   ├── ai/               transcriptie, signalen, kandidaten (pass 1+2), evaluator (pass 3), scoring,
+│   │   │                     boundaries, dedupe, vision, costs, pipeline, providers/ (OpenAI, Anthropic)
+│   │   ├── video/            ffmpeg, audio-features, scènedetectie, reframing, captions, render
+│   │   ├── services/         YouTube, discovery, queue, storage, media/inbox, deel-links, settings, learning, usage
 │   │   ├── api/              REST-endpoints
 │   │   ├── worker/           job-handlers + worker-loop (scheduler, inbox, recovery)
 │   │   ├── models.py         database-schema
 │   │   └── demo.py           demo-data zonder API keys
 │   ├── alembic/              migraties (SQLite + PostgreSQL)
-│   └── tests/                85 tests (unit, API, end-to-end met echte ffmpeg-render)
+│   └── tests/                110+ tests (unit, API, YouTube-API-stub, end-to-end met echte ffmpeg-render)
 ├── frontend/                 Next.js 16 · React 19 · Tailwind 4 · TypeScript
 │   ├── app/                  pagina's + /api proxy-route
 │   ├── components/ lib/
-│   └── proxy.ts              optionele Basic-auth voor het dashboard
+│   └── proxy.ts              Basic-auth voor het dashboard
 ├── docs/ALGORITHM.md         uitleg selectie-algoritme & scoring
+├── scripts/                  dev.sh, check_secrets.py
 ├── docker-compose.yml        Postgres + API + worker + dashboard
-├── .env.example
-├── Makefile · scripts/dev.sh
-└── .github/workflows/ci.yml
+├── .env.example · Makefile · .github/workflows/ci.yml
 ```
 
-## 3. Installatie
+### Lokaal draaien zonder Docker
 
-### Snelste route: Docker (aanbevolen)
-
-Vereist: [Docker Desktop](https://www.docker.com/products/docker-desktop/) of Docker Engine + Compose v2.
-
-```bash
-git clone https://github.com/karstenhiemstra/viral-clip-ai.git
-cd viral-clip-ai
-cp .env.example .env          # vul (minimaal) YOUTUBE_API_KEY en OPENAI_API_KEY of ANTHROPIC_API_KEY in
-docker compose up -d --build  # of: make up
-```
-
-Open **http://localhost:3000**. Keys kun je ook later invullen op de Settings-pagina.
-
-### Zonder Docker
-
-Vereist: Python 3.11+, Node.js 20.9+ (22 aanbevolen), **ffmpeg** (met libass — standaard in de meeste builds).
+Vereist: Python 3.11+, Node.js 20.9+ (22 aanbevolen), **ffmpeg** (met libass).
 
 ```bash
 # macOS: brew install ffmpeg python@3.12 node
 # Ubuntu/Debian: sudo apt install ffmpeg python3-venv nodejs npm fonts-montserrat
-make setup     # venv + pip install + npm install + .env aanmaken
+make setup     # venv + pip install + npm install + .env + pre-commit secret check
 make demo      # optioneel: demo-video + clips zonder API keys
 make dev       # API (8000) + worker + dashboard (3000)
 ```
 
-## 4. Dependencies
+| Commando | Wat |
+|---|---|
+| `make test` | secret scan + ruff + pytest + eslint + next build |
+| `make api` / `make worker` / `make web` | los starten |
+| `make secrets` / `make hooks` | secret scan / pre-commit hook installeren |
+| `python -m app.worker.runner --once` | wachtrij één keer leegdraaien (in `backend/`) |
+| `TEST_DATABASE_URL=postgresql://… pytest` | tests tegen PostgreSQL |
 
-**Backend** (`backend/pyproject.toml`): FastAPI, Uvicorn, SQLAlchemy 2, Alembic, Pydantic 2, httpx, NumPy, OpenCV (headless, 4.x — bevat de Haar-gezichtsdetector), cryptography (versleutelde API keys), OpenAI SDK, Anthropic SDK, psycopg 3. Optioneel: `boto3` (S3), `faster-whisper` (gratis lokale transcriptie).
+API-documentatie: http://localhost:8000/docs. De tests gebruiken een getrouwe stub van de YouTube Data API (`backend/tests/youtube_stub.py`, zelfde JSON- en foutformaat); met `YOUTUBE_API_BASE`/`YOUTUBE_WEB_BASE` kun je de hele app tegen die stub draaien.
 
-**Systeem:** ffmpeg + ffprobe (knippen, audio-analyse, scènedetectie, rendering, captions via libass). Fonts: Montserrat (Debian/Ubuntu `fonts-montserrat`; valt anders terug op een systeemfont).
+### Database
 
-**Frontend** (`frontend/package.json`): Next.js 16, React 19, Tailwind CSS 4, SWR, lucide-react, Inter (self-hosted via @fontsource). Geen chart-library: de grafieken zijn lichte SVG-componenten.
-
-## 5. API keys
-
-| Key | Waarvoor | Verplicht? |
-|---|---|---|
-| `YOUTUBE_API_KEY` | Creators zoeken op naam, video-metadata (duur, views), comment-hotspots | Aanbevolen. Zonder key: kanaal-URL met `/channel/UC…` plakken; scannen via RSS werkt wel |
-| `OPENAI_API_KEY` | Whisper-transcriptie (en/of GPT-scoring, embeddings) | Nodig voor automatische transcriptie, tenzij je faster-whisper installeert of SRT/VTT aanlevert |
-| `ANTHROPIC_API_KEY` | Claude-scoring (pass 1 + 2) | Optioneel (OpenAI kan ook). Zonder LLM-key: lokale heuristiek |
-
-Keys kunnen in `.env` óf via **Settings → API keys** (versleuteld met `APP_SECRET_KEY` opgeslagen, nooit teruggestuurd naar de browser). Een key uit Settings wint van `.env`.
-
-## 6. Database setup
-
-- **Lokaal (standaard):** SQLite in `data/viralclip.db` — niets te doen.
+- **Lokaal:** SQLite in `data/viralclip.db` — niets te doen.
 - **Docker Compose:** PostgreSQL 16 draait mee; `DATABASE_URL` wordt automatisch gezet.
-- **Supabase / eigen Postgres:** zet `DATABASE_URL=postgresql://user:wachtwoord@host:5432/postgres` (Supabase: *Project Settings → Database → Connection string*, gebruik de *session pooler* of directe verbinding).
+- **Supabase / eigen Postgres:** `DATABASE_URL=postgresql://user:wachtwoord@host:5432/postgres`.
 
-Migraties draaien automatisch bij het starten van de API. Handmatig: `make migrate` (of `python -m app.migrate` in `backend/`). Nieuwe migratie na een modelwijziging: `cd backend && alembic revision --autogenerate -m "..."`.
+Migraties draaien automatisch bij het starten van de API (`make migrate` handmatig; nieuwe migratie: `cd backend && alembic revision --autogenerate -m "..."`).
 
-## 7. Environment variables
+### Environment variables
 
-Alle variabelen staan met uitleg in [`.env.example`](.env.example). De belangrijkste:
+Alle variabelen staan met uitleg in [`.env.example`](.env.example). Alles wat je dagelijks wilt aanpassen (gewichten, clipduur, captions, filters, interval, kwaliteit, modellen) staat in **Settings** en wordt in de database bewaard.
 
 | Variabele | Standaard | Uitleg |
 |---|---|---|
-| `YOUTUBE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | — | zie §5 |
-| `OPENAI_BASE_URL` | — | OpenAI-compatibele endpoint (OpenRouter, lokale Ollama/vLLM) |
+| `YOUTUBE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | — | zie [API keys](#welke-api-keys-heb-je-nodig) |
 | `LLM_PROVIDER` | `auto` | `auto` / `openai` / `anthropic` / `heuristic` |
-| `LLM_MODEL_FAST` / `LLM_MODEL_SMART` | provider-default | modellen voor pass 1 / pass 2 |
+| `LLM_QUALITY` | `balanced` | `budget` / `balanced` / `best` |
+| `LLM_MODEL_FAST` / `LLM_MODEL_SMART` | volgt `LLM_QUALITY` | model voor pass 1 / pass 3 overschrijven |
 | `TRANSCRIBER` | `auto` | `openai` / `faster_whisper` / `none` |
-| `DATABASE_URL` | SQLite | zie §6 |
-| `STORAGE_BACKEND` | `local` | `local` of `s3` (+ `S3_*` variabelen) |
-| `APP_SECRET_KEY` | automatisch | versleutelt API keys uit het dashboard |
-| `API_AUTH_TOKEN` | — | bearer-token tussen dashboard en API (productie) |
-| `DASHBOARD_PASSWORD` / `DASHBOARD_USER` | — / `admin` | Basic-auth op het hele dashboard (productie) |
+| `OPENAI_BASE_URL` | — | OpenAI-compatibele server (OpenRouter, lokale Ollama/vLLM) |
+| `DATABASE_URL` | SQLite | zie hierboven |
+| `STORAGE_BACKEND` | `local` | `local` of `s3` (+ `S3_*`) |
+| `APP_SECRET_KEY`, `API_AUTH_TOKEN`, `DASHBOARD_PASSWORD` | — | zie [beveiliging](#beveiliging) |
+| `MAX_UPLOAD_GB` | `20` | limiet voor uploads en deel-links |
 | `APP_TIMEZONE` | `Europe/Amsterdam` | voor de filter "vandaag" |
 
-Alles wat je dagelijks wilt tweaken (gewichten, clipduur, captions, filters, interval, modellen) staat op de **Settings-pagina** en wordt in de database bewaard.
+### Video processing
 
-## 8. Lokale development
+Bronnen: **upload** (gestreamd, ook bestanden van meerdere GB), **deel-link** (Google Drive / Dropbox / OneDrive / directe link, met SSRF-bescherming), **inbox-map** `data/inbox/` (bestandsnaam met het video-ID, ook `.srt`/`.vtt`), of **transcript eerst** (analyse draait direct; preview via de officiële YouTube-embed; renderen zodra het bestand er is — zonder opnieuw te analyseren).
 
-```bash
-make dev        # API met auto-reload, worker en Next.js dev-server
-make api | make worker | make web   # los starten
-make test       # ruff + pytest + eslint + next build
-make demo       # demo-data
-```
+Rendering (`backend/app/video/`): knippen met stilte-verwijdering → reframing (YuNet- of Haar-gezichtsdetectie, tracking, actieve spreker via mondbeweging, stabiele crops die alleen wisselen bij spreker- of camerawissel; split-screen bij twee actieve sprekers; blur-fit zonder gezichten; golfvorm bij alleen audio) → ASS-captions (woord-gesynchroniseerd, nadruk-woorden, 3 stijlen) → loudness −14 LUFS → H.264/AAC 1080×1920 (faststart) + thumbnail. Per clip pas je captions, layout en start/einde (±0,5 s) aan en render je opnieuw.
 
-- API-documentatie (OpenAPI): http://localhost:8000/docs
-- Worker eenmalig de wachtrij laten leegdraaien: `python -m app.worker.runner --once`
-- Tests tegen PostgreSQL: `TEST_DATABASE_URL=postgresql://… pytest`
+### Deployment
 
-## 9. YouTube API setup
-
-1. Ga naar [console.cloud.google.com](https://console.cloud.google.com/) → nieuw project.
-2. *APIs & Services → Library* → **YouTube Data API v3** → *Enable*.
-3. *APIs & Services → Credentials* → *Create credentials → API key*. Beperk de key tot de YouTube Data API.
-4. Zet de key in `.env` of in **Settings** en klik **Test**.
-
-**Quota (10.000 units/dag gratis) — zo zuinig gebruikt ViralClip ze:**
-
-| Actie | Kosten |
-|---|---|
-| Nieuwe uploads checken (publieke RSS-feed) | **0** |
-| Creator toevoegen via @handle of URL | 1 |
-| Creator zoeken op naam (`search.list`) | 100 |
-| Metadata van nieuwe video's (`videos.list`, 50 per call) | 1 |
-| Top-comments voor hotspots (`commentThreads.list`) | 1 per video |
-| Kanaalstatistieken verversen | 1 per scan |
-
-Met 20 creators en elke 2 uur een scan blijf je ruim onder de 1.000 units per dag.
-
-## 10. AI API setup & kosten
-
-**Anthropic (Claude):** maak een key op [console.anthropic.com](https://console.anthropic.com/). Standaard: `claude-haiku-4-5` voor pass 1 (kandidaten zoeken) en `claude-opus-5-5` voor pass 2 (strenge ranking). Structured outputs garanderen geldige JSON; de rubric wordt via prompt caching hergebruikt; server-side *refusal fallbacks* zijn aangezet zodat een zeldzame weigering op bv. een controversieel transcript automatisch op een fallback-model opnieuw draait.
-
-**OpenAI:** key via [platform.openai.com](https://platform.openai.com/api-keys). Standaard `gpt-5-mini` (pass 1) en `gpt-5` (pass 2), Whisper `whisper-1` voor transcriptie (~$0,006/min), `text-embedding-3-small` voor duplicate-detectie. Via `OPENAI_BASE_URL` werkt elke OpenAI-compatibele server.
-
-**Kosten-indicatie per video van 20 minuten** (werkelijke kosten worden per analyse bijgehouden: video-detailpagina en Analytics):
-
-| Onderdeel | Indicatie |
-|---|---|
-| Transcriptie Whisper API | ~$0,12 (lokaal faster-whisper: $0) |
-| Pass 1 (snel model, hele transcript) | ~$0,01–0,03 |
-| Pass 2 (slim model, alleen ~30 kandidaten) | ~$0,10–0,60 afhankelijk van model (Sonnet 5.5 ≈ helft van Opus 5.5) |
-| Vision (optioneel, alleen top N) | ~$0,02–0,10 |
-| Heuristische modus | $0 |
-
-Kostenknoppen (Settings): slim model (bv. `claude-sonnet-5-5`), aantal kandidaten, batchgrootte, vision aan/uit, lokale transcriptie, min. videolengte en *aantal video's per scan*.
-
-## 11. Video processing
-
-**Waar komt het videobestand vandaan?** ViralClip downloadt **niets** van YouTube (zie §15). Bronbestanden komen via:
-
-1. **Upload** in het dashboard (Videos → *Upload bron*, of *Video toevoegen → Bestand uploaden*). Streaming upload, ook voor bestanden van meerdere GB.
-2. **Inbox-map** `data/inbox/`: zet er een bestand in met het YouTube-video-ID in de naam, bv. `Enzo Knol - mijn vlog [dQw4w9WgXcQ].mp4`. De worker koppelt het automatisch aan de juiste video en start de analyse. Ideaal met een gedeelde Google Drive/Dropbox-map van een creator. Ook `.srt`/`.vtt` met het ID in de naam wordt herkend.
-3. **Transcript eerst**: upload een SRT/VTT — de video wordt dan al geanalyseerd en gerankt; de clip-preview gebruikt dan de officiële YouTube-embed op het juiste tijdstip, en renderen gebeurt zodra het bestand er is.
-
-**Rendering** (`backend/app/video/`): knippen met stilte-verwijdering → reframing (YuNet- of Haar-gezichtsdetectie, tracking, actieve-spreker-heuristiek via mondbeweging, stabiele crops die alleen wisselen bij spreker/camera-wissel; split-screen bij twee actieve sprekers; blur-fit zonder gezichten) → ASS-captions (woord-gesynchroniseerd, nadruk-woorden, positie buiten gezichten en TikTok-UI) → loudness-normalisatie (−14 LUFS) → H.264 1080×1920 + thumbnail. Per clip kun je captions, layout en start/einde (±0,5 s) aanpassen en opnieuw renderen.
-
-## 12. Deployment
-
-**VPS (bv. Hetzner, DigitalOcean) met Docker Compose — aanbevolen**
+**VPS (bv. Hetzner, DigitalOcean) met Docker Compose**
 
 ```bash
-# op de server
-git clone … && cd viral-clip-ai && cp .env.example .env
-# zet minimaal: POSTGRES_PASSWORD, APP_SECRET_KEY, API_AUTH_TOKEN, DASHBOARD_PASSWORD en je API keys
+git clone https://github.com/karstenhiemstra/viral-clip-ai.git && cd viral-clip-ai && cp .env.example .env
+# zet: POSTGRES_PASSWORD, APP_SECRET_KEY, API_AUTH_TOKEN, DASHBOARD_PASSWORD en je API keys
 docker compose up -d --build
 ```
 
-Zet er een reverse proxy met HTTPS voor, bv. Caddy (`/etc/caddy/Caddyfile`):
+Het dashboard luistert op `127.0.0.1:3000`. Zet er een reverse proxy met HTTPS voor, bv. Caddy (`/etc/caddy/Caddyfile`):
 
 ```
 clips.jouwdomein.nl {
@@ -270,51 +361,54 @@ clips.jouwdomein.nl {
 }
 ```
 
-De API luistert alleen op `127.0.0.1:8000`; het dashboard praat server-side met de API. Meer rekenkracht: `docker compose up -d --scale worker=3` (de queue gebruikt `SKIP LOCKED`, dus workers bijten elkaar niet).
+Meer rekenkracht: `docker compose up -d --scale worker=3` (de queue gebruikt `SKIP LOCKED`). Managed onderdelen: database op Supabase/Neon (`DATABASE_URL`), opslag op Cloudflare R2/S3/Supabase Storage (`STORAGE_BACKEND=s3`). Lokale transcriptie in Docker: `INSTALL_LOCAL_WHISPER=true docker compose build` en `TRANSCRIBER=faster_whisper`.
 
-**Managed onderdelen:** database op Supabase/Neon (`DATABASE_URL`), opslag op Cloudflare R2/S3/Supabase Storage (`STORAGE_BACKEND=s3` + `S3_*`). Het dashboard kan desgewenst op Vercel (`BACKEND_URL` naar je API); API + worker horen op een machine met ffmpeg en voldoende CPU (Railway/Render/Fly met de meegeleverde Dockerfile werkt ook).
+---
 
-**Lokale transcriptie in Docker:** `INSTALL_LOCAL_WHISPER=true docker compose build` en `TRANSCRIBER=faster_whisper`.
-
-## 13. Troubleshooting
+## Problemen oplossen
 
 | Probleem | Oplossing |
 |---|---|
-| *"ffmpeg is niet gevonden"* | Installeer ffmpeg (`brew install ffmpeg` / `apt install ffmpeg`) of gebruik Docker. |
-| Video blijft op **Wacht op bron** | Normaal: upload het bestand of zet het in `data/inbox/` met het video-ID in de naam. |
-| *"Geen spraak-naar-tekst beschikbaar"* | Zet `OPENAI_API_KEY`, installeer `faster-whisper`, of upload een SRT/VTT. |
-| *"Zoeken op naam vereist een YouTube API key"* | Key instellen, of plak de kanaal-URL (`youtube.com/channel/UC…`). |
-| *"YouTube API quota is op"* | Wacht tot middernacht Pacific Time; vermijd zoeken op naam (100 units), gebruik @handles. |
-| Scores voelen willekeurig | Zonder LLM-key draait de heuristiek. Stel een AI-key in; geef feedback zodat het persoonlijke model gaat leren (vanaf 12 beoordelingen). |
-| Captions in een ander lettertype | Installeer Montserrat (`fonts-montserrat`) of zet `.ttf`-bestanden in `backend/assets/fonts/`. |
-| Reframing volgt het gezicht niet goed | De YuNet-detector wordt automatisch gedownload (in Docker tijdens de build); zonder internet valt het terug op Haar. Kies per clip *Volg spreker*, *Midden crop* of *Blur-fit*. |
-| Jobs blijven hangen | Controleer of de worker draait (`docker compose logs worker`). Vastgelopen jobs worden na 30 min automatisch opnieuw ingepland; retry/annuleer op de Queue-pagina. |
-| 401 in het dashboard | `DASHBOARD_PASSWORD` staat aan (Basic-auth), of `API_AUTH_TOKEN` verschilt tussen `web` en `api`. |
-| `Backend niet bereikbaar` | Draait de API? Klopt `BACKEND_URL` (lokaal `http://localhost:8000`, in Docker `http://api:8000`)? |
+| *"De YouTube API key is ongeldig"* | Opnieuw kopiëren (zonder spaties) en in Settings op **Test** klikken. |
+| *"De YouTube Data API v3 staat nog niet aan"* | Stap 4.3: de API inschakelen in Google Cloud voor hetzelfde project als de key. |
+| *"YouTube API quota is op"* | Wacht tot 09:00 Nederlandse tijd (middernacht in Californië). Zoek creators op @handle of URL i.p.v. op naam (1 i.p.v. 100 units). |
+| *"Je OpenAI-tegoed is op"* | platform.openai.com → Settings → Billing → tegoed toevoegen. Intussen werkt de gratis heuristiek. |
+| *"Ongeldige OPENAI_API_KEY"* | Nieuwe key maken (stap 5) en in Settings plakken → **Test**. |
+| Video blijft op **Wacht op bron** | Normaal: lever het bestand, een deel-link of ondertitels aan (stap 10). |
+| Deel-link werkt niet | Google Drive: zet delen op *"Iedereen met de link"*. Dropbox/OneDrive: gebruik de deel-link van het bestand, niet van de map. |
+| Preview speelt niet af | Gebruik Chrome, Edge, Safari of Firefox (H.264). Download werkt altijd. |
+| *"ffmpeg is niet gevonden"* | Gebruik Docker, of installeer ffmpeg (`brew install ffmpeg` / `apt install ffmpeg`). |
+| Scores voelen willekeurig | Zonder AI-key draait de heuristiek. Stel een OpenAI-key in en geef feedback (het persoonlijke model start vanaf 12 beoordelingen). |
+| Reframing volgt het gezicht niet goed | Kies per clip *Volg spreker*, *Midden crop* of *Blur-fit* en render opnieuw. |
+| Jobs blijven hangen | `docker compose logs -f worker`. Vastgelopen jobs worden na 30 min opnieuw ingepland; retry/annuleer op de Queue-pagina. |
+| Inlogvenster blijft terugkomen | Gebruikersnaam `admin` (of `DASHBOARD_USER`) met het wachtwoord uit `.env`; na wijzigen: `docker compose up -d`. |
+| `Backend niet bereikbaar` | `docker compose ps` — draait `api`? Lokaal moet `BACKEND_URL=http://localhost:8000` zijn. |
 
-## 14. Kritische ontwerpkeuzes (waar ik afweek van het oorspronkelijke plan)
+---
 
-1. **Geen YouTube-downloads.** YouTube's voorwaarden verbieden downloaden buiten YouTube's eigen functies om, en jij vroeg expliciet om geen beveiligingen te omzeilen. Daarom: officiële API + RSS voor discovery, en het bronbestand via een toegestane route (creator-clippingprogramma's, eigen content, gedeelde map). Om de automatisering toch zo groot mogelijk te houden: de inbox-map, transcript-eerst-analyse en YouTube-embed-previews.
-2. **Comment-hotspots als gratis "crowd signal".** Tijdstempels die kijkers in comments noemen zijn het sterkste externe bewijs dat een moment deelbaar is — en ze kosten 1 quota-unit.
-3. **RSS in plaats van `search.list` voor het scannen**: 0 quota i.p.v. 100 units per creator per scan.
-4. **Funnel-score in plaats van een gemiddelde.** Een clip moet eerst stoppen, dan vasthouden, dan engagen. Een meetkundig gemiddelde van die drie stadia straft een zwakke hook af, zoals TikTok dat ook doet.
-5. **Het LLM rekent niet met tijden.** Het verwijst naar zin-ID's; code rekent die om naar woord-exacte tijden. Dat voorkomt de meest voorkomende fout: clips die midden in een woord beginnen.
-6. **Twee generatoren voor kandidaten** (LLM + audio/tekst/crowd-signalen): het LLM "hoort" geen gelach of geschreeuw; de signalen missen subtiele humor. Samen hogere recall.
-7. **Database-queue i.p.v. Celery/Redis**: één minder onderdeel, de queue ís de Analysis Queue-pagina, en overleeft herstarts.
-8. **Eén Python-package** (`backend/app/{ai,video,services}`) i.p.v. losse top-level mappen `ai/` en `video-processing/`: eenvoudiger importeren, testen en deployen.
-9. **Same-origin API-proxy in Next.js**: geen CORS, de API-token blijft server-side, en grote uploads worden gestreamd.
-10. **Werkt zonder keys**: de heuristische modus en `make demo` maken het hele systeem direct bekijkbaar en testbaar.
+## Ontwerpkeuzes
 
-## 15. Juridisch (YouTube Terms of Service)
+1. **Geen YouTube-downloads.** YouTube's voorwaarden verbieden het en jij vroeg om geen beveiligingen te omzeilen. Automatisering zit daarom in discovery, de inbox-map, deel-links, transcript-eerst-analyse en YouTube-embed-previews.
+2. **API-first discovery** via de uploads-playlist (1 unit per pagina, stopt bij de gekozen periode) met RSS als gratis terugval — zoeken (`search.list`, 100 units) alleen bij het toevoegen op naam.
+3. **Comment-tijdstempels als gratis "crowd signal"**: het sterkste externe bewijs dat een moment deelbaar is.
+4. **3 passes:** goedkoop model leest alles, lokale code maakt de shortlist, duur model beoordeelt alleen die shortlist.
+5. **Funnel-score** (meetkundig gemiddelde van Stop/Hold/Engage) in plaats van een gewoon gemiddelde.
+6. **Het taalmodel rekent niet met tijden**: het verwijst naar zin-nummers; code rekent die om naar woord-exacte tijden. Geen clips die midden in een woord beginnen.
+7. **Twee bronnen voor kandidaten** (AI + audio/tekst/comment-signalen): het taalmodel "hoort" geen gelach; de signalen missen subtiele humor.
+8. **Database-queue** i.p.v. Celery/Redis: één onderdeel minder, de queue ís de Analysis Queue-pagina en overleeft herstarts.
+9. **Same-origin API-proxy**: geen CORS-problemen, het API-token blijft server-side, grote uploads worden gestreamd.
+10. **Werkt zonder betaalde keys**: heuristiek + `make demo` maken alles direct bekijkbaar.
+
+### Juridisch (YouTube Terms of Service)
 
 - Discovery gebruikt uitsluitend de **YouTube Data API v3**, de **publieke RSS-feeds** en **oEmbed**; previews gebruiken de **officiële embed-player**.
-- ViralClip **downloadt, scrapet of omzeilt niets**. Het bronbestand lever je zelf aan vanuit een bron waarvoor je toestemming hebt.
-- Clips van andermans content publiceren vereist toestemming van de rechthebbende (veel grote creators hebben daarvoor een clipping-programma). Jij bent verantwoordelijk voor het naleven van auteursrecht en de voorwaarden van TikTok/YouTube/Instagram.
+- ViralClip **downloadt, scrapet of omzeilt niets** op YouTube. Het bronbestand lever je zelf aan vanuit een bron waarvoor je toestemming hebt.
+- Clips van andermans content publiceren vereist toestemming van de rechthebbende (veel creators hebben daarvoor een clipping-programma). Jij bent verantwoordelijk voor auteursrecht en de voorwaarden van TikTok/YouTube/Instagram.
 
-## 16. Roadmap
+### Roadmap
 
-- TikTok/YouTube Analytics-koppeling om statistieken automatisch op te halen (nu handmatig per clip).
-- Uitgebreidere vision: gezichtsexpressies en reacties van meerdere personen per frame.
-- "Cold open"-edits: de punchline als flash-forward vóór de opbouw zetten.
+- TikTok/YouTube Analytics-koppeling om statistieken automatisch op te halen.
+- Uitgebreidere vision: gezichtsexpressies en reacties per frame.
+- "Cold open"-edits: de punchline als flash-forward vóór de opbouw.
 - Captions-editor met woordcorrectie in de browser.
 - Multi-user/teams met rollen.

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.serializers import clip_out, iso
 from app.db import get_db
 from app.models import (
+    AnalysisRun,
     ApiUsage,
     Clip,
     ClipPerformance,
@@ -43,7 +44,37 @@ def system_warnings(db: Session) -> list[dict[str, str]]:
         out.append({"level": "warning", "text": "Geen YouTube API key: creators zoeken op naam en video-metadata zijn beperkt (RSS werkt wel)."})
     if rs.ai.llm_provider != "heuristic" and not (get_secret(db, "openai_api_key") or get_secret(db, "anthropic_api_key")):
         out.append({"level": "warning", "text": "Geen AI API key: clips worden gescoord met de lokale heuristiek (minder nauwkeurig)."})
+    # Surface AI failures of the most recent analysis (invalid key, no credit, model unavailable).
+    run = db.scalar(
+        select(AnalysisRun).where(AnalysisRun.finished_at >= utcnow() - timedelta(days=3)).order_by(AnalysisRun.id.desc())
+    )
+    if run is not None:
+        items = next((s.get("items") or [] for s in (run.stage_log or []) if s.get("stage") == "warnings"), [])
+        fatal = next((w for w in items if w.startswith("AI uitgeschakeld")), None)
+        if fatal:
+            out.append({"level": "error", "text": f"Laatste analyse: {fatal}"})
+        elif any("niet gelukt" in w or w.startswith(("Pass 1", "Pass 3")) for w in items):
+            out.append({"level": "warning", "text": "Bij de laatste analyse faalden sommige AI-aanroepen; zie de videopagina voor details."})
     return out
+
+
+def setup_checklist(db: Session) -> list[dict[str, object]]:
+    """What a new user still has to do, in order. Shown on the dashboard until everything is done."""
+    has_ai = bool(get_secret(db, "openai_api_key") or get_secret(db, "anthropic_api_key"))
+    return [
+        {"key": "youtube_key", "done": bool(get_secret(db, "youtube_api_key")), "label": "YouTube API key instellen",
+         "hint": "Instellingen → API keys. Nodig om creators en nieuwe video's automatisch te vinden.", "href": "/settings"},
+        {"key": "ai_key", "done": has_ai, "label": "OpenAI API key instellen (aanbevolen)",
+         "hint": "Instellingen → API keys. Zonder key werkt de gratis heuristiek (minder slim).", "href": "/settings"},
+        {"key": "creator", "done": bool(db.scalar(select(func.count()).select_from(Creator))), "label": "Eerste creator toevoegen",
+         "hint": "Creators → Creator toevoegen, bijv. 'Enzo Knol'.", "href": "/creators"},
+        {"key": "source", "done": bool(db.scalar(select(func.count()).select_from(Video).where(
+            (Video.media_key.is_not(None)) | (Video.analyzed_at.is_not(None))))),
+         "label": "Bronvideo of ondertitels aanleveren",
+         "hint": "Video's → kies een video → upload het MP4-bestand, een deel-link of een .srt.", "href": "/videos?status=awaiting_media"},
+        {"key": "clip", "done": bool(db.scalar(select(func.count()).select_from(Clip))), "label": "Eerste clips bekijken",
+         "hint": "Na de analyse verschijnen de beste clips hier op het dashboard.", "href": "/clips"},
+    ]
 
 
 @router.get("/dashboard")
@@ -94,6 +125,7 @@ def dashboard(db: Session = Depends(get_db)):
         "today_by_creator": sorted(per_creator.values(), key=lambda c: c["viral_score"], reverse=True)[:10],
         "usage": usage_summary(db),
         "warnings": system_warnings(db),
+        "setup": setup_checklist(db),
     }
 
 

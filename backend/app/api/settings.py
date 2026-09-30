@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
+from app.ai.costs import estimate_video_cost
 from app.ai.llm import LLMError, get_llm
 from app.ai.scoring import DIMENSIONS, LABELS_NL, STAGES
 from app.ai.transcription import TranscriptionError, get_transcriber
@@ -51,6 +52,21 @@ def _system(db: Session) -> dict[str, Any]:
     except TranscriptionError as e:
         transcriber = f"error: {e}"
     face = "yunet" if s.face_model_path.exists() else ("haar" if hasattr(cv2, "CascadeClassifier") else "none")
+    provider = llm_info["provider"] if llm_info["provider"] in ("openai", "anthropic") else "openai"
+    whisper_api = transcriber == "openai_whisper" or (llm_info["provider"] not in ("openai", "anthropic"))
+    cost_rows = []
+    for minutes in (10, 30, 60):
+        row: dict[str, Any] = {"minutes": minutes}
+        for quality in ("budget", "balanced", "best"):
+            est = estimate_video_cost(
+                minutes, provider, quality, candidates=rs.pipeline.candidate_count,
+                transcribe_with_whisper_api=whisper_api,
+                model_fast=rs.ai.model_fast, model_smart=rs.ai.model_smart,
+            )
+            row[quality] = est["total"]
+            row[f"{quality}_models"] = est["models"]
+        row["transcription"] = est["transcription"]
+        cost_rows.append(row)
     return {
         "ffmpeg": ffmpeg.available(),
         "face_detector": face,
@@ -60,6 +76,13 @@ def _system(db: Session) -> dict[str, Any]:
         "database": get_engine().dialect.name,
         "auth_enabled": bool(s.api_auth_token),
         "timezone": s.app_timezone,
+        "cost_estimate": {
+            "provider": provider,
+            "active": llm_info["provider"] in ("openai", "anthropic"),
+            "quality": rs.ai.quality,
+            "whisper_api": whisper_api,
+            "rows": cost_rows,
+        },
     }
 
 

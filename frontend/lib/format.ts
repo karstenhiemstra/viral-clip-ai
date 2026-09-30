@@ -116,6 +116,7 @@ export const JOB_TYPES: Record<string, string> = {
   scan_creator: "Kanaalscan",
   analyze_video: "Analyse",
   render_clip: "Render",
+  import_media: "Bron importeren",
   train_model: "Leermodel",
 };
 

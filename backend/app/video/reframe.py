@@ -26,7 +26,7 @@ from app.video import ffmpeg
 log = logging.getLogger(__name__)
 
 SAMPLE_FPS = 4.0
-ANALYSIS_WIDTH = 480
+ANALYSIS_WIDTH = 640
 
 
 @dataclass
@@ -140,18 +140,29 @@ class FaceDetector:
             return [f for f in out if f.w > w * 0.03]
         if self._haar:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            gray = cv2.equalizeHist(gray)
-            min_size = (int(h * 0.09), int(h * 0.09))
-            boxes: list[tuple[int, int, int, int]] = []
-            for i, clf in enumerate(self._haar):
-                found = clf.detectMultiScale(gray, scaleFactor=1.12, minNeighbors=6, minSize=min_size)
-                boxes += [tuple(map(int, b)) for b in found]
-                if i == 1:  # profile cascade only detects one orientation; also run it mirrored
-                    flipped = clf.detectMultiScale(cv2.flip(gray, 1), scaleFactor=1.12, minNeighbors=6, minSize=min_size)
-                    boxes += [(w - x - bw, y, bw, bh) for (x, y, bw, bh) in map(lambda b: tuple(map(int, b)), flipped)]
+            boxes = self._haar_boxes(gray, h, w)
+            if not boxes:
+                # Dark / low-contrast footage: retry with LOCAL contrast enhancement. (Global histogram
+                # equalisation is avoided on purpose: a flat background dominates the histogram and
+                # washes out the face - measured 0/40 vs 40/40 detections on a test clip.)
+                boxes = self._haar_boxes(_CLAHE.apply(gray), h, w)
             faces = [Face(x, y, bw, bh, 1.0, (x + bw * 0.25, y + bh * 0.62, bw * 0.5, bh * 0.3)) for x, y, bw, bh in boxes]
             return _nms(faces)
         return []
+
+    def _haar_boxes(self, gray: np.ndarray, h: int, w: int) -> list[tuple[int, int, int, int]]:
+        side = max(20, int(h * 0.06))
+        boxes: list[tuple[int, int, int, int]] = []
+        for i, clf in enumerate(self._haar):
+            found = clf.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=6, minSize=(side, side))
+            boxes += [tuple(map(int, b)) for b in found]
+            if i == 1:  # profile cascade only detects one orientation; also run it mirrored
+                flipped = clf.detectMultiScale(cv2.flip(gray, 1), scaleFactor=1.1, minNeighbors=6, minSize=(side, side))
+                boxes += [(w - x - bw, y, bw, bh) for (x, y, bw, bh) in map(lambda b: tuple(map(int, b)), flipped)]
+        return boxes
+
+
+_CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
 
 def _nms(faces: list[Face], thr: float = 0.3) -> list[Face]:

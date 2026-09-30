@@ -121,6 +121,9 @@ class PipelineSettings(BaseModel):
 
 class AISettings(BaseModel):
     llm_provider: Literal["auto", "openai", "anthropic", "heuristic"] = "auto"
+    # budget = cheapest model for both passes; balanced = cheap pass 1 + smart pass 3 (low effort);
+    # best = smart pass 3 with more reasoning. Explicit model_fast/model_smart override the preset.
+    quality: Literal["budget", "balanced", "best"] = "balanced"
     model_fast: str = ""
     model_smart: str = ""
     vision_model: str = ""
@@ -146,6 +149,7 @@ def _env_ai_defaults() -> dict[str, Any]:
     s = get_settings()
     return {
         "llm_provider": s.llm_provider if s.llm_provider in ("auto", "openai", "anthropic", "heuristic") else "auto",
+        "quality": s.llm_quality if s.llm_quality in ("budget", "balanced", "best") else "balanced",
         "model_fast": s.llm_model_fast,
         "model_smart": s.llm_model_smart,
         "transcriber": s.transcriber if s.transcriber in ("auto", "openai", "faster_whisper", "none") else "auto",

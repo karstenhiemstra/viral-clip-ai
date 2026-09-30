@@ -124,6 +124,19 @@ export default function ClipDetailPage() {
     }
   }
 
+  async function rerender() {
+    setSaving(true);
+    try {
+      await api(`/api/clips/${clip!.id}/render`, { method: "POST" });
+      mutate();
+      toast("Clip wordt opnieuw gerenderd");
+    } catch (e) {
+      toast(errorText(e), "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function nudge(which: "start" | "end", delta: number) {
     const next = { start, end, [which]: Math.max(0, (which === "start" ? start : end) + delta) };
     if (next.end - next.start >= 2) setTrim(next);
@@ -146,6 +159,17 @@ export default function ClipDetailPage() {
             </div>
           )}
           {clip.render_error && <p className="rounded-lg border border-bad/30 bg-bad/10 p-3 text-xs text-bad">{clip.render_error.slice(-400)}</p>}
+          {clip.status === "awaiting_media" && (
+            <p className="rounded-lg border border-warn/30 bg-warn/10 p-3 text-xs text-warn">
+              Deze clip is gevonden op basis van het transcript. Lever het bronbestand aan op de{" "}
+              <Link href={`/videos/${clip.video_id}`} className="underline">videopagina</Link> (upload of deel-link); daarna wordt de 9:16-clip automatisch gerenderd.
+            </p>
+          )}
+          {(clip.status === "failed" || clip.status === "ready") && (
+            <Button className="w-full" variant="secondary" loading={saving} icon={<RefreshCw className="size-4" />} onClick={rerender}>
+              Opnieuw renderen
+            </Button>
+          )}
           <FeedbackButtons clip={clip} onChange={(c) => mutate(c, { revalidate: false })} />
 
           <Card className="space-y-4 p-4">

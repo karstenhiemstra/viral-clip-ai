@@ -162,6 +162,7 @@ def test_auth_token(monkeypatch, db):
         assert c.get("/api/creators").status_code == 401
         assert c.get("/api/creators", headers={"Authorization": "Bearer s3cret"}).status_code == 200
         assert c.get("/api/creators", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert c.get("/api/creators?token=s3cret").status_code == 401  # never via the URL
 
 
 def test_end_to_end_with_media_renders_vertical_clips(client, db, test_video):

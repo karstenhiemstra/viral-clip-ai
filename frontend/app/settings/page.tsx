@@ -14,13 +14,74 @@ type Section = keyof Settings;
 
 const SECRET_INFO: Record<string, { label: string; hint: ReactNode; test?: "youtube" | "llm" }> = {
   youtube_api_key: {
-    label: "YouTube Data API key",
-    hint: <>Google Cloud Console → YouTube Data API v3 inschakelen → API key maken. Gratis quota: 10.000 units/dag.</>,
+    label: "YouTube Data API key (gratis, nodig)",
+    hint: <>console.cloud.google.com → project maken → &quot;YouTube Data API v3&quot; inschakelen → Credentials → Create credentials → API key. Gratis quota: 10.000 units/dag.</>,
     test: "youtube",
   },
-  openai_api_key: { label: "OpenAI API key", hint: "Voor Whisper-transcriptie en/of GPT-scoring (platform.openai.com).", test: "llm" },
-  anthropic_api_key: { label: "Anthropic API key", hint: "Voor Claude-scoring (console.anthropic.com).", test: "llm" },
+  openai_api_key: {
+    label: "OpenAI API key (aanbevolen, betaald)",
+    hint: "platform.openai.com → API keys → Create new secret key. Eén key doet transcriptie (Whisper) én de AI-analyse.",
+    test: "llm",
+  },
+  anthropic_api_key: {
+    label: "Anthropic API key (optioneel)",
+    hint: "Alleen nodig als je Claude wilt i.p.v. OpenAI (console.anthropic.com). Let op: Anthropic kan niet transcriberen.",
+    test: "llm",
+  },
 };
+
+const QUALITY_INFO: Record<string, { label: string; hint: string }> = {
+  budget: { label: "Budget", hint: "Goedkoopste model voor beide passes" },
+  balanced: { label: "Gebalanceerd (aanbevolen)", hint: "Goedkoop model leest alles, slim model beoordeelt alleen de ~30 kandidaten" },
+  best: { label: "Beste kwaliteit", hint: "Slim model denkt langer na over de kandidaten" },
+};
+
+function usd(range: unknown) {
+  const [lo, hi] = (range as [number, number]) ?? [0, 0];
+  const f = (v: number) => `$${v.toFixed(2).replace(".", ",")}`;
+  return Math.abs(hi - lo) < 0.005 ? f(lo) : `${f(lo)}–${f(hi)}`;
+}
+
+function CostTable({ est }: { est: SettingsPayload["system"]["cost_estimate"] }) {
+  const qualities = ["budget", "balanced", "best"];
+  return (
+    <div className="border-t border-line p-5">
+      <div className="mb-2 text-sm font-medium text-ink">Geschatte AI-kosten per video ({est.provider === "anthropic" ? "Anthropic" : "OpenAI"})</div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] text-sm">
+          <thead>
+            <tr className="text-left text-xs text-muted">
+              <th className="py-1.5 pr-3 font-medium">Videolengte</th>
+              {qualities.map((q) => (
+                <th key={q} className={`py-1.5 pr-3 font-medium ${q === est.quality ? "text-ink" : ""}`}>
+                  {QUALITY_INFO[q].label.replace(" (aanbevolen)", "")}{q === est.quality ? " • actief" : ""}
+                </th>
+              ))}
+              <th className="py-1.5 font-medium">waarvan transcriptie</th>
+            </tr>
+          </thead>
+          <tbody className="tabular-nums">
+            {est.rows.map((r) => (
+              <tr key={r.minutes} className="border-t border-line">
+                <td className="py-1.5 pr-3 text-muted">{r.minutes} min</td>
+                {qualities.map((q) => (
+                  <td key={q} className={`py-1.5 pr-3 ${q === est.quality ? "font-semibold text-ink" : "text-muted"}`}>{usd(r[q])}</td>
+                ))}
+                <td className="py-1.5 text-muted">{usd([r.transcription, r.transcription])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        Schatting op basis van gemeten tokengebruik van deze app en de publieke prijslijst (sept. 2026). De bandbreedte komt door
+        verborgen &quot;denk&quot;-tokens. Transcriptie telt alleen als je een video-/audiobestand aanlevert zonder ondertitels
+        {est.whisper_api ? " (OpenAI Whisper: $0,006 per minuut)" : " (lokaal: gratis)"}. Een .srt uploaden maakt transcriptie gratis.
+        De echte kosten per analyse zie je op de videopagina.
+      </p>
+    </div>
+  );
+}
 
 function SecretRow({ name, status, onSaved }: { name: string; status: SettingsPayload["secrets"][string]; onSaved: (p: SettingsPayload) => void }) {
   const toast = useToast();
@@ -189,8 +250,19 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
       </Card>
 
       <Card>
-        <CardHeader title="AI & modellen" subtitle="Pass 1 (kandidaten) gebruikt het snelle model, pass 2 (ranking) het slimme model." action={actions("ai")} />
+        <CardHeader
+          title="AI & modellen"
+          subtitle="Pass 1: goedkoop model leest het hele transcript. Pass 2: lokaal (gratis) de beste ~30 kiezen. Pass 3: slim model beoordeelt alleen die kandidaten."
+          action={actions("ai")}
+        />
         <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label="Kwaliteit / kosten" hint={QUALITY_INFO[s.ai.quality]?.hint}>
+            <Select className="w-full" value={s.ai.quality} onChange={(e) => update("ai", { quality: e.target.value as SettingsPayload["settings"]["ai"]["quality"] })}>
+              {Object.entries(QUALITY_INFO).map(([k, v]) => (
+                <option key={k} value={k}>{v.label}</option>
+              ))}
+            </Select>
+          </Field>
           <Field label="LLM-provider" hint="Auto = OpenAI als die key er is, anders Anthropic, anders lokale heuristiek.">
             <Select className="w-full" value={s.ai.llm_provider} onChange={(e) => update("ai", { llm_provider: e.target.value })}>
               <option value="auto">Automatisch</option>
@@ -199,10 +271,10 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
               <option value="heuristic">Alleen lokale heuristiek (gratis)</option>
             </Select>
           </Field>
-          <Field label="Snel model (pass 1)" hint="Leeg = standaard (claude-haiku-4-5 / gpt-5-mini)">
+          <Field label="Snel model (pass 1)" hint="Leeg = volgt de kwaliteitskeuze (gpt-5-mini / claude-haiku-4-5)">
             <Input value={s.ai.model_fast} placeholder="standaard" onChange={(e) => update("ai", { model_fast: e.target.value })} />
           </Field>
-          <Field label="Slim model (pass 2)" hint="Leeg = standaard (claude-opus-5-5 / gpt-5). claude-sonnet-5-5 halveert de kosten.">
+          <Field label="Slim model (pass 3)" hint="Leeg = volgt de kwaliteitskeuze (gpt-5 / claude-sonnet-5-5; bij 'Beste' claude-opus-5-5)">
             <Input value={s.ai.model_smart} placeholder="standaard" onChange={(e) => update("ai", { model_smart: e.target.value })} />
           </Field>
           <Field label="Transcriptie">
@@ -223,6 +295,8 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
             </Select>
           </Field>
         </div>
+        {data.system.llm.error && <div className="mx-5 mb-4 rounded-lg bg-bad/10 px-3 py-2 text-sm text-bad">{data.system.llm.error}</div>}
+        {data.system.cost_estimate && <CostTable est={data.system.cost_estimate} />}
       </Card>
 
       <Card>

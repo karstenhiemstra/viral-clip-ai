@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import uuid
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from app.models import (
 )
 from app.services import learning, queue
 from app.services.discovery import scan_creator
-from app.services.queue import JobContext, JobWaiting
+from app.services.queue import JobCancelled, JobContext, JobWaiting, PermanentJobError
 from app.services.settings_store import get_secret, load_settings
 from app.services.storage import get_storage
 from app.services.usage import record_usage
@@ -50,10 +51,24 @@ def handle_scan_creator(ctx: JobContext) -> str:
         if creator is None:
             return "Creator bestaat niet meer"
         rs = load_settings(db)
-        result = scan_creator(db, creator, youtube_client(db), rs, progress=lambda p, m: ctx.progress(p, "scan", m))
-        if result.errors and result.found == 0:
-            raise RuntimeError("; ".join(result.errors))
-        return f"{result.found} gevonden, {result.new} nieuw, {result.queued} in analysewachtrij, {result.skipped} overgeslagen"
+        manual = bool(ctx.payload.get("manual"))
+        result = scan_creator(
+            db,
+            creator,
+            youtube_client(db),
+            rs,
+            progress=lambda p, m: ctx.progress(p, "scan", m),
+            period=ctx.payload.get("period"),
+            max_videos=ctx.payload.get("max_videos"),
+            manual=manual,
+        )
+        if result.errors and not result.source:
+            raise RuntimeError("; ".join(dict.fromkeys(result.errors)))
+        via = {"api": "YouTube API", "rss": "RSS-feed"}.get(result.source, "?")
+        return (
+            f"{result.found} video's bekeken via {via}: {result.new} nieuw, {result.queued} in analysewachtrij, "
+            f"{result.skipped} overgeslagen door filters"
+        )
 
 
 # --- analyze --------------------------------------------------------------------------------------
@@ -74,6 +89,11 @@ def handle_analyze_video(ctx: JobContext) -> str:
         video = db.get(Video, ctx.video_id)
         if video is None:
             return "Video bestaat niet meer"
+        if video.analyzed_at is not None and video.clips and not ctx.payload.get("force"):
+            # Guard against paying twice: an analysed video is only re-analysed on explicit request.
+            video.status = VideoStatus.ANALYZED
+            db.commit()
+            return "Al geanalyseerd — overgeslagen (gebruik 'Opnieuw analyseren' om het te forceren)"
         creator = db.get(Creator, video.creator_id) if video.creator_id else None
         rs = load_settings(db)
         prev_status = video.status
@@ -92,6 +112,12 @@ def handle_analyze_video(ctx: JobContext) -> str:
             db.rollback()
             db.delete(run)
             video.status = VideoStatus.AWAITING_MEDIA
+            db.commit()
+            raise
+        except JobCancelled:
+            db.rollback()
+            db.delete(run)
+            video.status = prev_status if prev_status != VideoStatus.ANALYZING else VideoStatus.DISCOVERED
             db.commit()
             raise
         except Exception as e:
@@ -192,6 +218,7 @@ def handle_render_clip(ctx: JobContext) -> str:
         clip.status = ClipStatus.RENDERING
         clip.render_error = None
         db.commit()
+        cleanup: list[Path] = []
         try:
             ctx.progress(10, "render", "Bron analyseren")
             info = ffmpeg.probe(media)
@@ -204,6 +231,7 @@ def handle_render_clip(ctx: JobContext) -> str:
             ctx.progress(25, "render", "Reframen naar 9:16 + captions")
             tmp = get_settings().tmp_dir / f"render-{clip.id}-{uuid.uuid4().hex[:8]}"
             tmp.mkdir(parents=True, exist_ok=True)
+            cleanup.append(tmp)
             segments = [(float(a), float(b)) for a, b in (clip.segments or [[clip.start_time, clip.end_time]])]
             result = render_clip(
                 media,
@@ -228,17 +256,21 @@ def handle_render_clip(ctx: JobContext) -> str:
             clip.duration = result.duration
             clip.status = ClipStatus.READY
             db.commit()
-            try:
-                Path(tmp).rmdir()
-            except OSError:
-                pass
             return f"Clip gerenderd ({result.duration:.1f}s, layout {result.meta['crop']['layout']})"
+        except JobCancelled:
+            db.rollback()
+            clip.status = ClipStatus.PENDING_RENDER
+            db.commit()
+            raise
         except Exception as e:
             db.rollback()
             clip.status = ClipStatus.FAILED
             clip.render_error = str(e)[-3000:]
             db.commit()
             raise
+        finally:
+            for d in cleanup:
+                shutil.rmtree(d, ignore_errors=True)
 
 
 def rebuild_clip_window(db: Session, clip: Clip, start: float, end: float) -> None:
@@ -275,6 +307,34 @@ def rebuild_clip_window(db: Session, clip: Clip, start: float, end: float) -> No
     clip.duration = round(sum(b - a for a, b in segs), 2)
 
 
+# --- import source from a share link -------------------------------------------------------------
+
+
+def handle_import_media(ctx: JobContext) -> str:
+    from app.services.media import attach_media
+    from app.services.remote_media import RemoteMediaError, download
+
+    url = str(ctx.payload.get("url") or "")
+    with SessionLocal() as db:
+        video = db.get(Video, ctx.video_id)
+        if video is None:
+            return "Video bestaat niet meer"
+        ctx.progress(2, "download", "Link controleren")
+        try:
+            path = download(url, progress=lambda f: ctx.progress(3 + 90 * f, "download", f"Downloaden… {f * 100:.0f}%"))
+        except RemoteMediaError as e:
+            raise PermanentJobError(str(e)) from e
+        try:
+            ctx.progress(95, "download", "Bestand controleren")
+            try:
+                attach_media(db, video, path, "link")
+            except (ValueError, ffmpeg.FFmpegError) as e:
+                raise PermanentJobError(f"Het gedownloade bestand is geen bruikbare video/audio: {e}") from e
+        finally:
+            path.unlink(missing_ok=True)
+        return "Bronbestand geïmporteerd — analyse/render gestart"
+
+
 # --- learning -------------------------------------------------------------------------------------
 
 
@@ -291,5 +351,6 @@ HANDLERS = {
     JobType.ANALYZE_VIDEO: handle_analyze_video,
     JobType.RENDER_CLIP: handle_render_clip,
     JobType.TRAIN_MODEL: handle_train_model,
+    JobType.IMPORT_MEDIA: handle_import_media,
 }
 

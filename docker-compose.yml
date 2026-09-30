@@ -66,7 +66,9 @@ services:
       api:
         condition: service_healthy
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      # Only reachable from this computer. To open it to your network/internet, set a DASHBOARD_PASSWORD
+      # first and change this to "${WEB_PORT:-3000}:3000" (or put a reverse proxy with HTTPS in front).
+      - "127.0.0.1:${WEB_PORT:-3000}:3000"
     restart: unless-stopped
 
 volumes:

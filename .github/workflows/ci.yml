@@ -6,6 +6,13 @@ on:
   pull_request:
 
 jobs:
+  secrets:
+    name: Secret scan (no API keys in Git)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_secrets.py
+
   backend:
     name: Backend (lint + tests, SQLite & PostgreSQL)
     runs-on: ubuntu-latest

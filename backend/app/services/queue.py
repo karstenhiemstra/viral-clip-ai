@@ -8,18 +8,26 @@ can run several worker processes safely (``docker compose up --scale worker=3``)
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, or_, select, text, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.models import Job, JobStatus, utcnow
 
+log = logging.getLogger(__name__)
+
 
 class JobCancelled(Exception):
     pass
+
+
+class PermanentJobError(Exception):
+    """A failure that retrying cannot fix (bad link, unsupported file, ...)."""
 
 
 class JobWaiting(Exception):
@@ -117,6 +125,8 @@ def claim_next(db: Session, worker_id: str, job_types: list[str] | None = None) 
 
 def _update(job_id: int, **values: Any) -> None:
     with SessionLocal() as s:
+        if s.get_bind().dialect.name == "sqlite" and set(values) <= {"progress", "heartbeat_at", "stage", "message"}:
+            s.execute(text("PRAGMA busy_timeout=3000"))
         s.execute(update(Job).where(Job.id == job_id).values(**values))
         s.commit()
 
@@ -142,14 +152,14 @@ def mark_waiting(job_id: int, message: str) -> None:
     _update(job_id, status=JobStatus.WAITING, message=message, locked_by=None, stage="waiting")
 
 
-def fail(job_id: int, error: str, *, retry_delay_seconds: int = 60) -> None:
+def fail(job_id: int, error: str, *, retry_delay_seconds: int = 60, retry: bool = True) -> None:
     with SessionLocal() as s:
         job = s.get(Job, job_id)
         if job is None:
             return
         if job.status == JobStatus.CANCELLED:
             return
-        if job.attempts < job.max_attempts:
+        if retry and job.attempts < job.max_attempts:
             job.status = JobStatus.QUEUED
             job.run_after = utcnow() + timedelta(seconds=retry_delay_seconds * job.attempts)
             job.message = f"Poging {job.attempts} mislukt, wordt opnieuw geprobeerd"
@@ -221,7 +231,10 @@ class JobContext:
             values["stage"] = stage
         if message is not None:
             values["message"] = message
-        _update(self.job_id, **values)
+        try:
+            _update(self.job_id, **values)
+        except OperationalError as e:  # a progress tick is not worth failing (or stalling) a job over
+            log.warning("Progress update skipped: %s", e)
         self._last_progress = pct
         self.check_cancelled()
 
