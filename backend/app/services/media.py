@@ -91,11 +91,17 @@ def import_subtitles(db: Session, video: Video, text: str, filename: str, *, que
     return tr
 
 
-def find_video_id_in_name(name: str) -> str | None:
+def video_id_candidates(name: str) -> list[str]:
+    """Possible YouTube ids in a file name; "[id]" (yt-style) first, then other 11-char tokens."""
     stem = Path(name).stem
-    candidates = _ID_IN_NAME.findall(stem)
-    # Prefer ids in brackets (yt-style "[id]") - the last match is usually the id.
-    return candidates[-1] if candidates else None
+    bracketed = re.findall(r"\[([A-Za-z0-9_-]{11})\]", stem)
+    others = [c for c in reversed(_ID_IN_NAME.findall(stem)) if c not in bracketed]
+    return bracketed + others
+
+
+def find_video_id_in_name(name: str) -> str | None:
+    candidates = video_id_candidates(name)
+    return candidates[0] if candidates else None
 
 
 def scan_inbox(db: Session, min_age_seconds: float = 20.0) -> list[int]:
@@ -113,8 +119,11 @@ def scan_inbox(db: Session, min_age_seconds: float = 20.0) -> list[int]:
             continue
         if now - path.stat().st_mtime < min_age_seconds:
             continue  # still being copied / synced
-        yt_id = find_video_id_in_name(path.name)
-        video = db.scalar(select(Video).where(Video.youtube_video_id == yt_id)) if yt_id else None
+        video = None
+        for yt_id in video_id_candidates(path.name):
+            video = db.scalar(select(Video).where(Video.youtube_video_id == yt_id))
+            if video is not None:
+                break
         try:
             if ext in SUB_EXTS:
                 if video is None:

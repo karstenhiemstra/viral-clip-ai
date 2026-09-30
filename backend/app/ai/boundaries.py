@@ -25,7 +25,7 @@ from app.ai.transcript import (
     leading_filler_count,
     starts_with_context_opener,
 )
-from app.video.audio_features import loud_tail
+from app.video.audio_features import clip_features, loud_tail
 
 _END_PUNCT = re.compile(r"[.!?…]+[\"'”’)]*$")
 
@@ -122,6 +122,18 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
         s0 += 1
     while s1 > s0 and (is_filler_sentence(ctx.sentences[s1], ctx.words) or contains_outro(ctx.sentences[s1].text)):
         s1 -= 1
+    # 1b. context repair (heuristic mode): a clip opening on a reference word ("Ze heeft...",
+    #     "Hij zei...") gets the sentence that introduces the reference, if it directly precedes it.
+    if hook_s is not None and s0 > 0 and starts_with_context_opener(ctx.sentences[s0].text):
+        prev = ctx.sentences[s0 - 1]
+        if (
+            ctx.sentences[s0].start - prev.end < 1.5
+            and not is_filler_sentence(prev, ctx.words)
+            and not contains_outro(prev.text)
+            and not starts_with_context_opener(prev.text)
+        ):
+            s0 -= 1
+            hook_s = s0
     # 2. extend if too short: prefer continuing forward (payoff), then include setup before.
     hard_max = rules.max_seconds + rules.tolerance
     while _span_duration(ctx, s0, s1) < rules.min_seconds:
@@ -141,6 +153,21 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
                 grew = True
         if not grew:
             break
+    # 2b. payoff-aware: when the strongest reaction comes right after the span, include it
+    #     (and, if needed, drop setup sentences before the hook to stay within the limit).
+    if ctx.audio is not None and s1 + 1 < n:
+        inside = clip_features(ctx.audio, ctx.sentences[s0].start, ctx.sentences[s1].end)
+        nxt = ctx.sentences[s1 + 1]
+        after = clip_features(ctx.audio, nxt.start, nxt.end)
+        if (
+            after.get("available")
+            and after["peak_z"] > max(1.8, inside["peak_z"] + 0.4)
+            and nxt.start - ctx.sentences[s1].end < 2.0
+            and not contains_outro(nxt.text)
+        ):
+            s1 += 1
+            while _span_duration(ctx, s0, s1) > hard_max and s0 < s1 and (hook_s is None or s0 < hook_s):
+                s0 += 1
     # 3. if too long, search the best sub-span
     if _span_duration(ctx, s0, s1) > rules.max_seconds:
         key_times = _key_times(ctx, s0, s1)

@@ -17,11 +17,12 @@ from app.ai.transcript import (
     Sentence,
     Word,
     contains_outro,
+    is_intro_text,
     leading_filler_count,
     normalize,
     starts_with_context_opener,
 )
-from app.video.audio_features import AudioProfile, clip_features
+from app.video.audio_features import AudioProfile, clip_features, peak_after
 
 LEXICON: dict[str, set[str]] = {
     "question": {"wat", "waarom", "hoe", "wie", "welke", "waar", "wanneer", "serieus", "echt", "what", "why", "how",
@@ -42,13 +43,15 @@ LEXICON: dict[str, set[str]] = {
     "story": {"toen", "gebeurde", "verhaal", "vroeger", "ooit", "keer", "bleek", "blijkt", "eigenlijk", "geheim",
               "verteld", "waarheid", "story", "happened", "once", "secret", "truth", "actually", "gisteren",
               "vorige", "plots"},
+    "teaser": {"nieuws", "geheim", "onthulling", "bekentenis", "opbiechten", "waarheid", "news", "secret",
+               "confession", "reveal", "eindelijk", "finally"},
     "stakes": {"euro", "euros", "€", "duizend", "miljoen", "geld", "betalen", "gratis", "gewonnen", "verloren",
                "winnen", "verliezen", "dood", "ziekenhuis", "politie", "gearresteerd", "boete", "money", "million",
                "thousand", "won", "lost", "police", "hospital", "dollar", "record"},
 }
 SUPERLATIVE_RE = re.compile(r"^(?:aller)?\w{2,}ste$")
 NUMBER_RE = re.compile(r"\d")
-STRONG_CATEGORIES = ("intensity", "surprise", "stakes", "humor", "question", "controversy")
+STRONG_CATEGORIES = ("intensity", "surprise", "stakes", "humor", "question", "controversy", "teaser")
 
 
 @dataclass
@@ -87,6 +90,9 @@ def category_hits(tokens: list[str], text: str = "") -> dict[str, int]:
         ("oh my god", "surprise"), ("eerlijk gezegd", "controversy"), ("onpopulaire mening", "controversy"),
         ("ik zweer", "intensity"), ("wist je dat", "question"), ("raad eens", "question"),
         ("nog nooit", "story"), ("never told", "story"), ("nooit verteld", "story"),
+        ("groot nieuws", "teaser"), ("moet jullie iets vertellen", "teaser"), ("moet ik jullie vertellen", "teaser"),
+        ("je raadt nooit", "teaser"), ("je gelooft nooit", "teaser"), ("wat er toen gebeurde", "teaser"),
+        ("raad eens", "teaser"), ("guess what", "teaser"), ("you won't believe", "teaser"), ("big news", "teaser"),
     ):
         if phrase in low:
             hits[cat] += 1
@@ -162,6 +168,7 @@ def window_features(ctx: VideoContext, start: float, end: float, clip_words: lis
         "has_number": 1.0 if NUMBER_RE.search(text) else 0.0,
         "superlatives": float(sum(1 for t in tokens if SUPERLATIVE_RE.match(t) and len(t) >= 5)),
         "outro": 1.0 if contains_outro(text) else 0.0,
+        "intro": 1.0 if is_intro_text(" ".join(w.text for w in clip_words[:14])) else 0.0,
         "crowd": round(crowd_strength(ctx.hotspots, start, end), 3),
         "scene_cuts_per_10s": round(cuts * 10.0 / dur, 3),
         "ends_complete": 1.0 if re.search(r"[.!?…]$", end_text.strip()) else 0.0,
@@ -173,6 +180,10 @@ def window_features(ctx: VideoContext, start: float, end: float, clip_words: lis
         feats[f"audio_{k}"] = round(float(v), 3)
     for k, v in hook.items():
         feats[f"hook_{k}"] = float(v)
+    # The loudest reaction right AFTER the cut means the payoff was cut off.
+    after = peak_after(ctx.audio, end, 4.0)
+    feats["audio_after_peak_z"] = round(after, 3)
+    feats["payoff_after_end"] = 1.0 if audio.get("available") and after > max(1.8, audio.get("peak_z", 0) + 0.4) else 0.0
     return feats
 
 
@@ -191,19 +202,20 @@ def heuristic_dimension_scores(f: dict[str, float]) -> dict[str, float]:
     silence = f.get("audio_silence_ratio", 0.0)
 
     hook = 42 + 18 * f.get("hook_first_strength", 0) + 7 * hook_z + 10 * f.get("hook_first_question", 0)
-    hook -= 22 * f.get("hook_starts_filler", 0) + 14 * f.get("hook_context_opener", 0)
+    hook -= 22 * f.get("hook_starts_filler", 0) + 14 * f.get("hook_context_opener", 0) + 25 * f.get("intro", 0)
     hook_strength = 100 - 14 * f.get("hook_time_to_strong", 5.0)
     curiosity = 35 + 10 * min(2, f.get("questions", 0)) + 9 * f.get("lex_story", 0) + 8 * f.get("lex_question", 0)
+    curiosity += 14 * f.get("lex_teaser", 0)
     curiosity += 6 * f.get("has_number", 0) + 5 * min(2, f.get("superlatives", 0))
     emotion = 30 + 11 * peak + 1.2 * f.get("audio_std_db", 0) + 12 * f.get("lex_intensity", 0) + 5 * min(3, f.get("exclamations", 0))
     surprise = 30 + 16 * f.get("lex_surprise", 0) + (10 if peak > 2.3 else 0) + 6 * f.get("lex_stakes", 0)
     humor_s = 22 + 28 * humor + 6 * f.get("audio_burst_count", 0) + (10 if f.get("humor_end") else 0)
     comment = 30 + 16 * f.get("lex_controversy", 0) + 6 * min(2, f.get("questions", 0)) + 25 * crowd
     retention = 48 + 12 * min(1.3, rel_rate) - 70 * silence + 10 * (1 if f.get("audio_peak_pos", 0) > 0.45 else 0)
-    retention -= 25 * f.get("outro", 0)
+    retention -= 25 * f.get("outro", 0) + 15 * f.get("intro", 0)
     context = 78 - 22 * f.get("hook_context_opener", 0) - 8 * f.get("hook_starts_filler", 0) + 6 * f.get("ends_complete", 0)
     payoff = 38 + 16 * (1 if f.get("audio_peak_pos", 0) > 0.5 else 0) + 8 * max(0, f.get("audio_end_z", 0))
-    payoff += 12 * f.get("humor_end", 0) + 10 * f.get("ends_complete", 0)
+    payoff += 12 * f.get("humor_end", 0) + 10 * f.get("ends_complete", 0) - 25 * f.get("payoff_after_end", 0)
     share = 0.35 * humor_s + 0.3 * surprise + 0.2 * emotion + 0.15 * curiosity + 22 * crowd
     rewatch = 0.45 * humor_s + 0.25 * surprise + 8 * min(1.4, rel_rate) + 10 * crowd
     scores = {
@@ -227,7 +239,7 @@ def signal_score(f: dict[str, float]) -> float:
     """One number (0-100) for 'the raw signals say something is happening here'."""
     audio = f.get("audio_available", 0.0) > 0
     lex = (
-        f.get("lex_intensity", 0) + f.get("lex_surprise", 0) + f.get("lex_humor", 0) * 1.5
+        f.get("lex_intensity", 0) + f.get("lex_surprise", 0) + f.get("lex_humor", 0) * 1.5 + f.get("lex_teaser", 0)
         + f.get("lex_controversy", 0) + f.get("lex_story", 0) * 0.6 + f.get("lex_stakes", 0) * 0.8
     )
     s = 28.0
@@ -238,7 +250,7 @@ def signal_score(f: dict[str, float]) -> float:
     if audio:
         s += 7 * max(0.0, min(3.0, f.get("audio_peak_z", 0))) + 4 * max(-1.0, min(2.0, f.get("audio_hook_z", 0)))
         s -= 30 * f.get("audio_silence_ratio", 0)
-    s -= 25 * f.get("outro", 0)
+    s -= 25 * f.get("outro", 0) + 20 * f.get("intro", 0) + 10 * f.get("payoff_after_end", 0)
     return round(_c(s), 1)
 
 
@@ -247,9 +259,9 @@ def feature_vector(f: dict[str, float], scores: dict[str, float] | None = None) 
     keys = (
         "duration", "rel_speech_rate", "questions", "exclamations", "has_number", "crowd", "scene_cuts_per_10s",
         "ends_complete", "humor_end", "lex_question", "lex_intensity", "lex_humor", "lex_surprise",
-        "lex_controversy", "lex_story", "lex_stakes", "audio_peak_z", "audio_hook_z", "audio_silence_ratio",
+        "lex_controversy", "lex_story", "lex_stakes", "lex_teaser", "audio_peak_z", "audio_hook_z", "audio_silence_ratio",
         "audio_peak_pos", "hook_starts_filler", "hook_context_opener", "hook_time_to_strong", "hook_first_strength",
-        "hook_first_question",
+        "hook_first_question", "intro", "payoff_after_end",
     )
     vec = {k: float(f.get(k, 0.0)) for k in keys}
     for k, v in (scores or {}).items():

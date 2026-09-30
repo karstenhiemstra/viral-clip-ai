@@ -25,7 +25,13 @@ from sqlalchemy.orm import Session
 from app.ai.boundaries import ClipWindow, DurationRules, optimize_boundaries
 from app.ai.candidates import Candidate, llm_candidates, merge_candidates, signal_candidates
 from app.ai.dedupe import mmr_select, similarity_matrix
-from app.ai.evaluator import emphasis_from_text, evaluate_heuristic, evaluate_llm
+from app.ai.evaluator import (
+    emphasis_from_text,
+    evaluate_heuristic,
+    evaluate_llm,
+    heuristic_flags,
+    heuristic_packaging,
+)
 from app.ai.llm import LLMClient, UsageMeter
 from app.ai.scoring import compute_viral_score
 from app.ai.signals import (
@@ -247,7 +253,11 @@ def analyze_video(
         feats = window_features(ctx, window.start, window.end, clip_words)
         sig_score = signal_score(feats)
         dims = dict(ev.get("scores") or {}) if llm_mode else heuristic_dimension_scores(feats)
-        flags = sorted(set(ev.get("flags") or []) | set(window.flags))
+        # Heuristic flags describe the FINAL window (boundaries may have moved); LLM flags are kept.
+        base_flags = (ev.get("flags") or []) if llm_mode else heuristic_flags(feats)
+        flags = sorted(set(base_flags) | set(window.flags))
+        if not llm_mode:  # packaging must describe the final (possibly moved) window
+            ev = {**ev, **heuristic_packaging(ctx, clip_words, feats, c.category)}
         category = ev.get("category") or c.category or "other"
         fv = feature_vector(feats, dims)
         adj = learning.personal_adjustment(model, fv, category, rs.scoring.personalization_strength)
@@ -357,7 +367,7 @@ def analyze_video(
         if p is not None:
             row.update(
                 viral_score=p.viral_score, final_start=p.window.start, final_end=p.window.end,
-                selected=c.cid in selected_ids, verdict=p.extra.get("verdict"), why=p.why,
+                selected=c.cid in selected_ids, verdict=p.extra.get("verdict"), why=p.why, category=p.category,
             )
         else:
             row.update(selected=False, note="niet in shortlist")

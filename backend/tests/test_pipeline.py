@@ -1,6 +1,6 @@
 import pytest
 
-from app.ai.llm import parse_json_loose, estimate_cost, LLMError, get_llm
+from app.ai.llm import LLMError, estimate_cost, get_llm, parse_json_loose
 from app.ai.pipeline import analyze_video
 from app.models import Transcript, Video
 from app.services.queue import JobWaiting
@@ -21,7 +21,7 @@ def _video_with_transcript(db, words, title="Supermarkt vlog"):
 def _assert_valid_output(out, rs):
     assert 1 <= len(out.plans) <= rs.clips.max_per_video
     spans = sorted((p.window.start, p.window.end) for p in out.plans)
-    for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+    for (a0, a1), (b0, b1) in zip(spans, spans[1:], strict=False):
         overlap = max(0.0, min(a1, b1) - max(a0, b0))
         assert overlap <= 0.35 * min(a1 - a0, b1 - b0) + 1e-6
     for p in out.plans:

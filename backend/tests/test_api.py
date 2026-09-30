@@ -194,3 +194,30 @@ def test_end_to_end_with_media_renders_vertical_clips(client, db, test_video):
     assert r.status_code == 200 and r.json()["status"] == "pending_render"
     Worker("e2e").drain()
     assert client.get(f"/api/clips/{clip['id']}").json()["status"] == "ready"
+
+
+def test_inbox_import_matches_youtube_id(db, test_video):
+    import os
+    import shutil
+    import time
+
+    from app.config import get_settings
+    from app.services.media import find_video_id_in_name, scan_inbox, video_id_candidates
+
+    assert find_video_id_in_name("Enzo Knol - Programming vlog [dQw4w9WgXcQ].mp4") == "dQw4w9WgXcQ"
+    assert video_id_candidates("Programming [dQw4w9WgXcQ].mp4")[0] == "dQw4w9WgXcQ"
+
+    v = Video(youtube_video_id="dQw4w9WgXcQ", title="Wachtende video", status=VideoStatus.AWAITING_MEDIA)
+    db.add(v)
+    db.commit()
+    inbox = get_settings().inbox_dir
+    target = inbox / "Enzo Knol - Programming vlog [dQw4w9WgXcQ].mp4"
+    shutil.copy(test_video, target)
+    old = time.time() - 120
+    os.utime(target, (old, old))
+    touched = scan_inbox(db)
+    assert v.id in touched
+    db.refresh(v)
+    assert v.media_key and v.media_origin == "inbox"
+    assert not target.exists() and (inbox / "_imported").exists() is False  # media is moved into storage
+    assert db.scalar(select(Job).where(Job.video_id == v.id, Job.type == JobType.ANALYZE_VIDEO)) is not None

@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -74,6 +74,17 @@ class Settings(BaseSettings):
     face_model_url: str = (
         "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx"
     )
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _default_db(cls, v: object) -> object:
+        # An empty DATABASE_URL= line in .env means "use the local SQLite default".
+        return v or f"sqlite:///{REPO_DIR / 'data' / 'viralclip.db'}"
+
+    @field_validator("data_dir", mode="before")
+    @classmethod
+    def _default_data_dir(cls, v: object) -> object:
+        return v or REPO_DIR / "data"
 
     @property
     def storage_dir(self) -> Path:

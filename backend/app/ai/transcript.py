@@ -139,11 +139,17 @@ FILLER_WORDS = {
     "um", "umm", "er", "erm", "so", "like", "well", "anyway", "anyways", "alright", "right", "yeah", "guys",
 }
 # Multi-word openers that kill a hook (checked on normalized, space-joined text).
+# Multi-word fillers that can be cut off the front of a clip without losing meaning.
 FILLER_PHRASES = (
-    "zoals ik al zei", "zoals gezegd", "zoals ik zei", "waar was ik", "even kijken", "laten we", "vandaag gaan we",
-    "in deze video", "welkom bij", "welkom terug", "hallo allemaal", "hoi allemaal", "hey allemaal", "hallo jongens",
-    "hoi jongens", "what's up", "whats up", "as i said", "like i said", "in this video", "welcome back",
-    "today we're", "today we are", "hey guys", "hi guys", "let's go", "lets go", "anyway so",
+    "zoals ik al zei", "zoals gezegd", "zoals ik zei", "waar was ik", "even kijken", "hallo allemaal", "hoi allemaal",
+    "hey allemaal", "hallo jongens", "hoi jongens", "what's up", "whats up", "as i said", "like i said", "hey guys",
+    "hi guys", "anyway so",
+)
+# Openers that announce an intro. They are NOT trimmed (the rest of the sentence depends on them);
+# instead the sentence counts as intro material and is avoided as a clip start.
+INTRO_PHRASES = (
+    "vandaag gaan we", "in deze video", "in de video van vandaag", "welkom bij", "welkom terug", "welkom in",
+    "laten we beginnen", "today we're", "today we are", "in this video", "welcome back", "welcome to",
 )
 _FILLER_PHRASE_TOKENS = sorted(
     ([normalize(t) for t in p.split()] for p in FILLER_PHRASES), key=len, reverse=True
@@ -158,6 +164,8 @@ GREETING_OUTRO = (
     "abonneer", "abonneren", "like en abonneer", "bel-icoon", "belletje", "tot de volgende", "doei", "tot morgen",
     "link in de beschrijving", "kortingscode", "gesponsord", "sponsor", "merch", "subscribe", "link in the description",
     "see you next time", "discount code", "sponsored", "thanks for watching", "bedankt voor het kijken",
+    "laat het weten in de comments", "laat het me weten in de comments", "laat een comment achter", "link in bio",
+    "let me know in the comments", "drop a comment",
 )
 
 
@@ -189,7 +197,14 @@ def is_filler_sentence(s: Sentence, words: list[Word]) -> bool:
     if not ws:
         return True
     lead = leading_filler_count(ws, max_scan=len(ws))
-    return lead >= len(ws) or (len(ws) <= 2 and all(w.norm in FILLER_WORDS for w in ws))
+    if lead >= len(ws) or (len(ws) <= 2 and all(w.norm in FILLER_WORDS for w in ws)):
+        return True
+    return is_intro_text(s.text)
+
+
+def is_intro_text(text: str) -> bool:
+    low = " ".join(normalize(t) for t in text.split())
+    return any(low.startswith(p) or f" {p}" in f" {low}"[:60] for p in INTRO_PHRASES)
 
 
 def contains_outro(text: str) -> bool:

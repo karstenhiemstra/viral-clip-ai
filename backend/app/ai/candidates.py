@@ -62,31 +62,40 @@ def iou(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 def signal_candidates(ctx: VideoContext, count: int, min_s: float, max_s: float, target_s: float) -> list[Candidate]:
+    """Sliding windows starting at every sentence; for each start the best-scoring length within the
+    duration range is kept, then non-maximum suppression picks diverse, high-signal windows."""
     sents = ctx.sentences
     windows: list[tuple[float, int, int]] = []
-    j = 0
+    lo, hi = min_s * 0.8, max_s * 1.3
     for i, s in enumerate(sents):
         if is_filler_sentence(s, ctx.words) or contains_outro(s.text):
             continue
-        j = max(j, i)
-        while j + 1 < len(sents) and sents[j].end - s.start < target_s:
-            j += 1
-        # pick the end that best matches the target duration
-        best_j = j
-        if j > i and abs((sents[j - 1].end - s.start) - target_s) < abs((sents[j].end - s.start) - target_s):
-            best_j = j - 1
-        dur = sents[best_j].end - s.start
-        if dur < min_s * 0.6 or dur > max_s * 1.8:
-            continue
-        feats = window_features(ctx, s.start, sents[best_j].end, ctx.words[s.w0 : sents[best_j].w1])
-        windows.append((signal_score(feats), i, best_j))
+        best: tuple[float, int] | None = None
+        for j in range(i, len(sents)):
+            dur = sents[j].end - s.start
+            if dur > hi:
+                break
+            if dur < lo:
+                continue
+            feats = window_features(ctx, s.start, sents[j].end, ctx.words[s.w0 : sents[j].w1])
+            score = signal_score(feats) - 0.6 * abs(dur - target_s)
+            if best is None or score > best[0]:
+                best = (score, j)
+        if best is None:
+            # a single long sentence: still consider it
+            j = i
+            if sents[j].end - s.start > hi or sents[j].end - s.start < min_s * 0.5:
+                continue
+            feats = window_features(ctx, s.start, sents[j].end, ctx.words[s.w0 : sents[j].w1])
+            best = (signal_score(feats), j)
+        windows.append((best[0], i, best[1]))
     windows.sort(reverse=True)
     picked: list[Candidate] = []
     for score, a, b in windows:
         span = (sents[a].start, sents[b].end)
         if any(iou(span, c.span(ctx)) > 0.3 for c in picked):
             continue
-        picked.append(Candidate(cid="", s0=a, s1=b, hook_s=a, sources={"signal"}, signal=score))
+        picked.append(Candidate(cid="", s0=a, s1=b, hook_s=a, sources={"signal"}, signal=round(score, 1)))
         if len(picked) >= count:
             break
     return picked

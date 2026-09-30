@@ -107,3 +107,11 @@ def test_interpolate_words_spreads_over_cue():
     words = interpolate_words([(10.0, 12.0, "een twee drie")])
     assert words[0].start == 10.0 and words[-1].end <= 12.0
     assert words[0].start < words[1].start < words[2].start
+
+
+def test_intro_detection():
+    from app.ai.transcript import is_intro_text
+
+    assert is_intro_text("Vandaag gaan we naar Parijs")
+    assert is_intro_text("Welkom terug op mijn kanaal")
+    assert not is_intro_text("Dit is het ergste wat ik ooit zag")

@@ -1,0 +1,73 @@
+# ViralClip AI - full stack: PostgreSQL + API + worker + dashboard.
+#   cp .env.example .env   # fill in your keys
+#   docker compose up -d --build
+#   open http://localhost:3000
+name: viralclip
+
+x-backend: &backend
+  build:
+    context: ./backend
+    args:
+      INSTALL_LOCAL_WHISPER: ${INSTALL_LOCAL_WHISPER:-false}
+  image: viralclip-backend:latest
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql://${POSTGRES_USER:-viralclip}:${POSTGRES_PASSWORD:-viralclip}@db:5432/${POSTGRES_DB:-viralclip}
+    DATA_DIR: /data
+    API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
+  volumes:
+    - ./data:/data   # storage, inbox folder (data/inbox) and model caches
+  restart: unless-stopped
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-viralclip}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-viralclip}
+      POSTGRES_DB: ${POSTGRES_DB:-viralclip}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-viralclip}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    <<: *backend
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"   # API docs at http://localhost:8000/docs (not exposed publicly)
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.worker.runner"]
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy   # the API runs the database migrations first
+
+  web:
+    build: ./frontend
+    image: viralclip-web:latest
+    environment:
+      BACKEND_URL: http://api:8000
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
+      DASHBOARD_USER: ${DASHBOARD_USER:-admin}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

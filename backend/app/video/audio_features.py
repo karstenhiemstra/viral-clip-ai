@@ -112,3 +112,12 @@ def loud_tail(profile: AudioProfile | None, t: float, max_extend: float = 1.5, m
     while ext < steps and i + ext < len(profile.z) and profile.z[i + ext] >= min_z:
         ext += 1
     return ext * profile.hop
+
+
+def peak_after(profile: AudioProfile | None, t: float, window: float = 4.0) -> float:
+    """Loudest z-score in (t, t + window]; 0 without audio."""
+    if profile is None or len(profile.z) == 0:
+        return 0.0
+    a, b = profile.idx(t) + 1, profile.idx(t + window) + 1
+    seg = profile.z[a:b]
+    return float(np.max(seg)) if len(seg) else 0.0

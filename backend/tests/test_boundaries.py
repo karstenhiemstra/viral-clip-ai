@@ -64,3 +64,43 @@ def test_end_does_not_bleed_into_next_word():
     w = optimize_boundaries(ctx, 0, 1, DurationRules(min_seconds=1, max_seconds=30, target_seconds=3))
     nxt = ctx.words[w.w1].start
     assert w.end < nxt
+
+
+def test_intro_phrases_are_not_trimmed_into_fragments():
+    ctx = ctx_for([
+        "Vandaag gaan we naar de supermarkt om boodschappen te doen.",
+        "Wacht wat, dit is echt niet normaal!",
+        "Die gast betaalde duizend euro voor een banaan.",
+        "Iedereen in de winkel keek ernaar met open mond.",
+    ])
+    w = optimize_boundaries(ctx, 0, 3, DurationRules(min_seconds=6, max_seconds=30, target_seconds=10), hook_s=0)
+    # the intro sentence is skipped as a whole instead of starting on "naar de supermarkt"
+    assert ctx.words[w.w0].text == "Wacht"
+
+
+def test_context_repair_includes_the_antecedent():
+    ctx = ctx_for([
+        "We lopen hier gewoon rond in de stad vandaag.",
+        "Mijn moeder belde gisteren en ze had groot nieuws.",
+        "Ze heeft de loterij gewonnen, een miljoen euro!",
+        "Ik schreeuwde zo hard dat de buren kwamen kijken.",
+    ])
+    w = optimize_boundaries(ctx, 2, 3, DurationRules(min_seconds=5, max_seconds=20, target_seconds=10), hook_s=2)
+    assert ctx.words[w.w0].text == "Mijn"
+
+
+def test_payoff_after_end_is_included():
+    import numpy as np
+
+    from app.video.audio_features import compute_profile
+
+    lines = ["Ik moet jullie iets vertellen over gisteren.", "Het was echt heel bizar allemaal.", "En toen ging het alarm keihard af!"]
+    ctx = ctx_for(lines)
+    sr = 8000
+    dur = ctx.duration
+    t = np.arange(int(sr * dur)) / sr
+    loud_from = ctx.sentences[2].start
+    amp = np.where(t >= loud_from, 0.9, 0.1)
+    ctx.audio = compute_profile((amp * np.sin(2 * np.pi * 200 * t)).astype(np.float32), sr)
+    w = optimize_boundaries(ctx, 0, 1, DurationRules(min_seconds=3, max_seconds=20, target_seconds=8), hook_s=0)
+    assert w.s1 == 2

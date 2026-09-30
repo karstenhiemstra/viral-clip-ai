@@ -1,12 +1,11 @@
+import numpy as np
 import pytest
 
 from app.video import ffmpeg
 from app.video.audio_features import clip_features, compute_profile, find_peaks, load_profile
-from app.video.captions import CaptionWord, PRESETS, ass_color, build_ass, caption_y, group_words
-from app.video.reframe import CropPlan, Face, Track, _choose_subjects, _segments_from_targets, build_tracks
+from app.video.captions import PRESETS, CaptionWord, ass_color, build_ass, caption_y, group_words
+from app.video.reframe import CropPlan, Face, _choose_subjects, _segments_from_targets, build_tracks
 from app.video.render import render_clip
-
-import numpy as np
 
 
 def test_ass_color():
@@ -50,7 +49,7 @@ def test_audio_profile_and_peaks():
 
 def test_face_tracking_and_speaker_hysteresis():
     frames = []
-    for i in range(40):
+    for _ in range(40):
         frames.append([Face(50, 50, 40, 40), Face(350, 60, 40, 40)])
     tracks = build_tracks(frames, 480)
     assert len(tracks) == 2
@@ -60,7 +59,7 @@ def test_face_tracking_and_speaker_hysteresis():
         tracks[1].activity[fi] = 0.0 if fi < 20 else 0.08
     chosen = _choose_subjects(tracks, 40, 480)
     assert chosen[5] == tracks[0].tid and chosen[35] == tracks[1].tid
-    switches = sum(1 for a, b in zip(chosen, chosen[1:]) if a != b)
+    switches = sum(1 for a, b in zip(chosen, chosen[1:], strict=False) if a != b)
     assert switches == 1
 
 

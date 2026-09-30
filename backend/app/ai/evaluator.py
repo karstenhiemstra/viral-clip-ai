@@ -158,39 +158,58 @@ _WHY_NL = {
 }
 
 
+def heuristic_packaging(ctx: VideoContext, words: list, feats: dict[str, float], category_hint: str | None = None) -> dict[str, Any]:
+    """Title / hook line / explanation / category for a window, derived from its own words."""
+    category = category_hint or next((cat for key, cat in _CATEGORY_BY_LEX if feats.get(key, 0) >= 0.8), "other")
+    first = ""
+    for w in words:
+        first = (first + " " + w.text).strip()
+        if w.text.endswith((".", "!", "?", "…")) and len(first) > 12:
+            break
+    why = _WHY_NL.get(category, _WHY_NL["other"])
+    if feats.get("crowd", 0) >= 0.2:
+        why += "; kijkers noemen dit moment in de comments"
+    if feats.get("audio_available") and feats.get("audio_peak_z", 0) >= 2.5:
+        why += "; duidelijke luide reactie in de audio"
+    return {
+        "category": category,
+        "title": first[:70],
+        "hook_line": first[:200],
+        "first_seconds": first[:200],
+        "why": why + ".",
+        "emphasis_words": [w.text.strip(".,!?") for w in words if _is_emphasis(w.norm)][:6],
+    }
+
+
 def heuristic_evaluation(ctx: VideoContext, c: Candidate) -> dict[str, Any]:
     a, b = c.span(ctx)
     words = ctx.words[ctx.sentences[c.s0].w0 : ctx.sentences[c.s1].w1]
     f = window_features(ctx, a, b, words)
-    scores = heuristic_dimension_scores(f)
-    category = c.category or next((cat for key, cat in _CATEGORY_BY_LEX if f.get(key, 0) >= 0.8), "other")
-    flags = []
-    if f.get("hook_context_opener"):
-        flags.append("needs_context")
-    if f.get("outro"):
-        flags.append("intro_or_outro")
-    if f.get("audio_available") and f.get("audio_silence_ratio", 0) > 0.3:
-        flags.append("low_energy")
-    strong = [w.text.strip(".,!?") for w in words if _is_emphasis(w.norm)][:6]
-    why = _WHY_NL.get(category, _WHY_NL["other"])
-    if f.get("crowd", 0) >= 0.2:
-        why += "; kijkers noemen dit moment in de comments"
-    first_sentence = ctx.sentences[c.s0].text
+    pack = heuristic_packaging(ctx, words, f, c.category)
     return {
-        "scores": scores,
-        "flags": flags,
+        "scores": heuristic_dimension_scores(f),
+        "flags": heuristic_flags(f),
         "verdict": None,
         "s0": c.s0,
         "s1": c.s1,
-        "category": category,
-        "title": (c.description or first_sentence)[:70],
-        "why": (c.reason or why) + ".",
-        "hook_line": first_sentence[:200],
-        "first_seconds": first_sentence[:200],
         "viewer_reaction": "",
-        "emphasis_words": strong,
         "mode": "heuristic",
+        **pack,
+        "why": c.reason or pack["why"],
     }
+
+
+def heuristic_flags(f: dict[str, float]) -> list[str]:
+    flags = []
+    if f.get("hook_context_opener"):
+        flags.append("needs_context")
+    if f.get("outro") or f.get("intro"):
+        flags.append("intro_or_outro")
+    if f.get("payoff_after_end"):
+        flags.append("weak_payoff")
+    if f.get("audio_available") and f.get("audio_silence_ratio", 0) > 0.3:
+        flags.append("low_energy")
+    return flags
 
 
 def _is_emphasis(tok: str) -> bool:

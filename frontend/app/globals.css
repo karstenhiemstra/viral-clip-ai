@@ -1,0 +1,70 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  --color-bg: #09090d;
+  --color-panel: #111118;
+  --color-panel-2: #181821;
+  --color-panel-3: #20202b;
+  --color-line: #262633;
+  --color-line-2: #34344a;
+  --color-ink: #f5f5f7;
+  --color-ink-2: #c9c9d6;
+  --color-muted: #8a8aa0;
+  --color-fire: #ff5a2e;
+  --color-fire-2: #ff2e7e;
+  --color-ok: #22c55e;
+  --color-warn: #f5a524;
+  --color-bad: #f04444;
+  --color-info: #5aa9ff;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+}
+
+body {
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-fire) 45%, transparent);
+}
+
+/* Thin, dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-2) transparent;
+}
+
+.fire-gradient {
+  background-image: linear-gradient(135deg, var(--color-fire), var(--color-fire-2));
+}
+
+.fire-text {
+  background-image: linear-gradient(135deg, #ff8a3d, var(--color-fire-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+input[type="range"] {
+  accent-color: var(--color-fire);
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
