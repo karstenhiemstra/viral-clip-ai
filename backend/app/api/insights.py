@@ -26,7 +26,7 @@ from app.models import (
     utcnow,
 )
 from app.services import learning, queue
-from app.services.settings_store import get_secret, load_settings
+from app.services.settings_store import get_secret, load_settings, secrets_status
 from app.services.usage import usage_summary
 from app.video import ffmpeg
 
@@ -40,10 +40,19 @@ def system_warnings(db: Session) -> list[dict[str, str]]:
     out = []
     if not ffmpeg.available():
         out.append({"level": "error", "text": "ffmpeg is niet gevonden: installeer ffmpeg om video's te analyseren en te renderen."})
+    keys = secrets_status(db)
     if not get_secret(db, "youtube_api_key"):
-        out.append({"level": "warning", "text": "Geen YouTube API key: creators zoeken op naam en video-metadata zijn beperkt (RSS werkt wel)."})
+        out.append({"level": "warning", "text": "Nog geen YouTube API key: vul hem in bij Settings → API keys om creators en hun nieuwe video's te vinden."})
+    for name, label in (("youtube_api_key", "YouTube"), ("openai_api_key", "OpenAI"), ("anthropic_api_key", "Anthropic")):
+        if keys[name]["status"] == "error":
+            out.append({"level": "error", "text": f"{label} API key werkt niet: {keys[name]['message']}"})
     if rs.ai.llm_provider != "heuristic" and not (get_secret(db, "openai_api_key") or get_secret(db, "anthropic_api_key")):
-        out.append({"level": "warning", "text": "Geen AI API key: clips worden gescoord met de lokale heuristiek (minder nauwkeurig)."})
+        out.append({"level": "warning", "text": "Nog geen OpenAI API key: clips worden gekozen met de gratis basisanalyse (minder slim). "
+                                                 "Vul je key in bij Settings → API keys."})
+    waiting_for_key = db.scalar(select(func.count()).select_from(Video).where(Video.status == VideoStatus.AWAITING_KEY)) or 0
+    if waiting_for_key:
+        out.append({"level": "error", "text": f"{waiting_for_key} video('s) staan klaar maar wachten op transcriptie: vul je OpenAI API key "
+                                               "in bij Settings → API keys (de analyse start dan vanzelf), of upload ondertitels (.srt)."})
     # Surface AI failures of the most recent analysis (invalid key, no credit, model unavailable).
     run = db.scalar(
         select(AnalysisRun).where(AnalysisRun.finished_at >= utcnow() - timedelta(days=3)).order_by(AnalysisRun.id.desc())
@@ -60,20 +69,32 @@ def system_warnings(db: Session) -> list[dict[str, str]]:
 
 def setup_checklist(db: Session) -> list[dict[str, object]]:
     """What a new user still has to do, in order. Shown on the dashboard until everything is done."""
-    has_ai = bool(get_secret(db, "openai_api_key") or get_secret(db, "anthropic_api_key"))
+    keys = secrets_status(db)
+
+    def key_step(name: str, label: str, hint: str) -> dict[str, object]:
+        k = keys[name]
+        done = k["status"] in ("connected", "untested")
+        if k["status"] == "error":
+            hint = f"De key werkt niet: {k['message']} Ga naar Settings → API keys."
+        return {"key": name, "done": done, "label": label, "hint": hint, "href": "/settings"}
+
+    openai_or_claude = keys["openai_api_key"] if keys["openai_api_key"]["configured"] else keys["anthropic_api_key"]
+    ai_step = key_step("openai_api_key", "OpenAI API key invullen (aanbevolen)",
+                       "Settings → API keys. Zonder key werkt de gratis basisanalyse (minder slim).")
+    ai_step["done"] = openai_or_claude["status"] in ("connected", "untested")
     return [
-        {"key": "youtube_key", "done": bool(get_secret(db, "youtube_api_key")), "label": "YouTube API key instellen",
-         "hint": "Instellingen → API keys. Nodig om creators en nieuwe video's automatisch te vinden.", "href": "/settings"},
-        {"key": "ai_key", "done": has_ai, "label": "OpenAI API key instellen (aanbevolen)",
-         "hint": "Instellingen → API keys. Zonder key werkt de gratis heuristiek (minder slim).", "href": "/settings"},
+        key_step("youtube_api_key", "YouTube API key invullen",
+                 "Settings → API keys. Nodig om creators en hun nieuwe video's te vinden (gratis)."),
+        ai_step,
         {"key": "creator", "done": bool(db.scalar(select(func.count()).select_from(Creator))), "label": "Eerste creator toevoegen",
          "hint": "Creators → Creator toevoegen, bijv. 'Enzo Knol'.", "href": "/creators"},
         {"key": "source", "done": bool(db.scalar(select(func.count()).select_from(Video).where(
             (Video.media_key.is_not(None)) | (Video.analyzed_at.is_not(None))))),
-         "label": "Bronvideo of ondertitels aanleveren",
-         "hint": "Video's → kies een video → upload het MP4-bestand, een deel-link of een .srt.", "href": "/videos?status=awaiting_media"},
-        {"key": "clip", "done": bool(db.scalar(select(func.count()).select_from(Clip))), "label": "Eerste clips bekijken",
-         "hint": "Na de analyse verschijnen de beste clips hier op het dashboard.", "href": "/clips"},
+         "label": "Bronvideo aanleveren",
+         "hint": "Videos → open een video → upload het bestand, plak een Drive/Dropbox/OneDrive-link of upload een .srt.",
+         "href": "/videos?status=awaiting_media"},
+        {"key": "clip", "done": bool(db.scalar(select(func.count()).select_from(Clip))), "label": "Clips bekijken en downloaden",
+         "hint": "Na de analyse staan de beste clips hier op het dashboard.", "href": "/clips"},
     ]
 
 

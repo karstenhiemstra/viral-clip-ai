@@ -31,11 +31,14 @@ class PermanentJobError(Exception):
 
 
 class JobWaiting(Exception):
-    """Raised by a handler when it cannot continue without user input (e.g. a media upload)."""
+    """Raised by a handler when it cannot continue without user input (e.g. a media upload).
 
-    def __init__(self, message: str):
+    ``reason`` says what is missing: "media" (source video / subtitles) or "api_key" (transcription)."""
+
+    def __init__(self, message: str, reason: str = "media"):
         super().__init__(message)
         self.message = message
+        self.reason = reason
 
 
 def enqueue(
@@ -196,6 +199,20 @@ def wake_waiting_for_video(db: Session, video_id: int) -> int:
         update(Job)
         .where(Job.video_id == video_id, Job.status == JobStatus.WAITING)
         .values(status=JobStatus.QUEUED, message="Media beschikbaar, opnieuw in de wachtrij", run_after=None)
+    )
+    db.commit()
+    return result.rowcount or 0
+
+
+def wake_waiting_for_api_key(db: Session) -> int:
+    """A transcription key was just added: resume every analysis that was waiting for it."""
+    from app.models import JobType, Video, VideoStatus
+
+    waiting_videos = select(Video.id).where(Video.status == VideoStatus.AWAITING_KEY)
+    result = db.execute(
+        update(Job)
+        .where(Job.type == JobType.ANALYZE_VIDEO, Job.status == JobStatus.WAITING, Job.video_id.in_(waiting_videos))
+        .values(status=JobStatus.QUEUED, message="API key ingesteld, analyse wordt hervat", run_after=None)
     )
     db.commit()
     return result.rowcount or 0

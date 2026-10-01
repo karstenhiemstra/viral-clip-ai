@@ -8,11 +8,12 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
 from app.ai.costs import estimate_video_cost
-from app.ai.llm import LLMError, get_llm
+from app.ai.llm import LLMError, get_llm, resolve_models
 from app.ai.scoring import DIMENSIONS, LABELS_NL, STAGES
 from app.ai.transcription import TranscriptionError, get_transcriber
 from app.config import get_settings
 from app.db import get_db, get_engine
+from app.services import queue
 from app.services.settings_store import (
     CAPTION_PRESETS,
     DEFAULT_STAGE_WEIGHTS,
@@ -22,6 +23,7 @@ from app.services.settings_store import (
     SECTIONS,
     get_secret,
     load_settings,
+    record_secret_check,
     reset_section,
     secrets_status,
     set_secret,
@@ -131,36 +133,66 @@ def reset(section: str, db: Session = Depends(get_db)):
 @router.post("/secrets")
 def save_secret(body: SecretIn, db: Session = Depends(get_db)):
     set_secret(db, body.name, body.value)
+    if body.value:
+        check_secret(db, body.name)  # test right away, so the page can say "Verbonden" or what is wrong
     return _payload(db)
 
 
-@router.post("/test/{service}")
-def test_service(service: Literal["youtube", "llm"], db: Session = Depends(get_db)):
-    if service == "youtube":
-        yt = YouTubeClient(get_secret(db, "youtube_api_key"))
-        if not yt.has_key:
-            return {"ok": False, "message": "Geen YouTube API key ingesteld"}
-        try:
-            ch = yt.get_channel_by_handle("@YouTube")
-            return {"ok": True, "message": f"YouTube API werkt (testkanaal: {ch.title if ch else 'onbekend'}, 1 quota-unit)"}
-        except YouTubeError as e:
-            return {"ok": False, "message": str(e)}
+@router.post("/secrets/{name}/test")
+def test_secret(name: Literal["youtube_api_key", "openai_api_key", "anthropic_api_key"], db: Session = Depends(get_db)):
+    result = check_secret(db, name)
+    return {**result, "settings": _payload(db)}
+
+
+_HEALTH_SCHEMA = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False}
+
+
+def check_secret(db: Session, name: str) -> dict[str, Any]:
+    """Test one API key with the cheapest possible real request and store the outcome."""
+    value = get_secret(db, name)
+    if not value:
+        return {"ok": False, "message": "Nog geen key ingevuld."}
+    if name == "youtube_api_key":
+        ok, message = _check_youtube(value)
+    else:
+        ok, message = _check_llm(db, name, value)
+    record_secret_check(db, name, ok, message)
+    if ok and name == "openai_api_key":
+        resumed = queue.wake_waiting_for_api_key(db)
+        if resumed:
+            message += f" {resumed} video('s) die op deze key wachtten worden nu geanalyseerd."
+    return {"ok": ok, "message": message}
+
+
+def _check_youtube(key: str) -> tuple[bool, str]:
+    try:
+        YouTubeClient(key).get_channel_by_handle("@YouTube")  # 1 quota unit
+    except YouTubeError as e:
+        return False, str(e)
+    except Exception as e:  # network trouble, proxy, ...
+        return False, f"YouTube is niet bereikbaar vanaf deze computer ({type(e).__name__}). Controleer je internetverbinding."
+    return True, "Verbonden met de YouTube Data API."
+
+
+def _check_llm(db: Session, name: str, key: str) -> tuple[bool, str]:
     rs = load_settings(db)
     try:
-        llm = get_llm(db, rs)
+        if name == "openai_api_key":
+            from app.ai.providers.openai_provider import OpenAIProvider
+
+            models, efforts = resolve_models("openai", rs.ai.quality, rs.ai.model_fast, rs.ai.model_smart)
+            llm = OpenAIProvider(api_key=key, base_url=get_settings().openai_base_url or None, models=models, efforts=efforts)
+            label = "OpenAI"
+        else:
+            from app.ai.providers.anthropic_provider import AnthropicProvider
+
+            models, efforts = resolve_models("anthropic", rs.ai.quality, rs.ai.model_fast, rs.ai.model_smart)
+            llm = AnthropicProvider(api_key=key, models=models, efforts=efforts)
+            label = "Anthropic"
+        res = llm.complete_json(system="You are a health check. Reply with JSON.", user='Return {"ok": true}.',
+                                schema=_HEALTH_SCHEMA, schema_name="health", tier="fast", max_tokens=200)
     except LLMError as e:
-        return {"ok": False, "message": str(e)}
-    if llm is None:
-        return {"ok": False, "message": "Geen LLM geconfigureerd: heuristische modus actief"}
-    try:
-        res = llm.complete_json(
-            system="You are a health check. Reply with JSON.",
-            user='Return {"ok": true}.',
-            schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False},
-            schema_name="health",
-            tier="fast",
-            max_tokens=200,
-        )
-        return {"ok": bool(res.data.get("ok")), "message": f"{llm.provider} / {res.usage.model} werkt", "cost_usd": res.usage.cost_usd}
-    except LLMError as e:
-        return {"ok": False, "message": str(e)}
+        return False, str(e)
+    except Exception as e:
+        return False, f"Onverwachte fout bij het testen ({type(e).__name__}): {e}"[:300]
+    return True, f"Verbonden met {label} (testmodel {res.usage.model})."

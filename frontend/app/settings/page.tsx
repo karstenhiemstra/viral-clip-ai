@@ -12,21 +12,18 @@ import type { SettingsPayload } from "@/lib/types";
 type Settings = SettingsPayload["settings"];
 type Section = keyof Settings;
 
-const SECRET_INFO: Record<string, { label: string; hint: ReactNode; test?: "youtube" | "llm" }> = {
+const SECRET_INFO: Record<string, { label: string; hint: ReactNode }> = {
   youtube_api_key: {
     label: "YouTube Data API key (gratis, nodig)",
     hint: <>console.cloud.google.com → project maken → &quot;YouTube Data API v3&quot; inschakelen → Credentials → Create credentials → API key. Gratis quota: 10.000 units/dag.</>,
-    test: "youtube",
   },
   openai_api_key: {
     label: "OpenAI API key (aanbevolen, betaald)",
-    hint: "platform.openai.com → API keys → Create new secret key. Eén key doet transcriptie (Whisper) én de AI-analyse.",
-    test: "llm",
+    hint: "platform.openai.com → API keys → Create new secret key, en zet tegoed op je account (Billing). Eén key doet transcriptie én de AI-analyse.",
   },
   anthropic_api_key: {
     label: "Anthropic API key (optioneel)",
     hint: "Alleen nodig als je Claude wilt i.p.v. OpenAI (console.anthropic.com). Let op: Anthropic kan niet transcriberen.",
-    test: "llm",
   },
 };
 
@@ -83,34 +80,45 @@ function CostTable({ est }: { est: SettingsPayload["system"]["cost_estimate"] })
   );
 }
 
+const KEY_STATUS: Record<string, { tone: "success" | "danger" | "muted" | "warning"; label: string }> = {
+  connected: { tone: "success", label: "Verbonden" },
+  error: { tone: "danger", label: "Niet verbonden" },
+  untested: { tone: "warning", label: "Nog niet getest" },
+  missing: { tone: "muted", label: "Niet ingesteld" },
+};
+
 function SecretRow({ name, status, onSaved }: { name: string; status: SettingsPayload["secrets"][string]; onSaved: (p: SettingsPayload) => void }) {
   const toast = useToast();
   const info = SECRET_INFO[name];
   const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null);
+  const [busy, setBusy] = useState<"save" | "test" | null>(null);
+  const st = KEY_STATUS[status.status] ?? KEY_STATUS.missing;
   async function save(v: string | null) {
-    setBusy(true);
+    setBusy("save");
     try {
       const p = await api<SettingsPayload>("/api/settings/secrets", { method: "POST", json: { name, value: v } });
       onSaved(p);
       setValue("");
-      toast(v ? "API key versleuteld opgeslagen" : "API key verwijderd");
+      const after = p.secrets[name];
+      if (!v) toast("API key verwijderd");
+      else if (after?.status === "connected") toast("Key opgeslagen en verbonden ✓");
+      else toast(`Key opgeslagen, maar de verbinding werkt nog niet: ${after?.message ?? "onbekende fout"}`, "error");
     } catch (e) {
       toast(errorText(e), "error");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
   async function runTest() {
-    if (!info.test) return;
-    setBusy(true);
+    setBusy("test");
     try {
-      setTest(await api(`/api/settings/test/${info.test}`, { method: "POST" }));
+      const r = await api<{ ok: boolean; message: string; settings: SettingsPayload }>(`/api/settings/secrets/${name}/test`, { method: "POST" });
+      onSaved(r.settings);
+      toast(r.ok ? "Verbinding werkt ✓" : r.message, r.ok ? "ok" : "error");
     } catch (e) {
-      setTest({ ok: false, message: errorText(e) });
+      toast(errorText(e), "error");
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
   return (
@@ -118,20 +126,21 @@ function SecretRow({ name, status, onSaved }: { name: string; status: SettingsPa
       <div className="flex flex-wrap items-center gap-2">
         <KeyRound className="size-4 text-muted" />
         <span className="text-sm font-medium">{info.label}</span>
-        {status.configured ? (
-          <Badge tone="success"><Check className="size-3" /> {status.masked} · {status.source === "ui" ? "via dashboard" : "via .env"}</Badge>
-        ) : (
-          <Badge tone="muted">Niet ingesteld</Badge>
-        )}
+        <Badge tone={st.tone}>
+          {status.status === "connected" && <Check className="size-3" />} {st.label}
+        </Badge>
+        {status.configured && <span className="text-xs text-muted">{status.masked} · {status.source === "ui" ? "ingevuld in de app" : "uit .env"}</span>}
       </div>
       <p className="text-xs text-muted">{info.hint}</p>
+      {status.status === "error" && status.message && (
+        <p className="rounded-lg border border-bad/30 bg-bad/10 px-3 py-2 text-xs text-bad">{status.message}</p>
+      )}
       <div className="flex flex-wrap gap-2">
-        <Input type="password" autoComplete="off" placeholder={status.configured ? "Nieuwe key om te vervangen" : "Plak je API key"} value={value} onChange={(e) => setValue(e.target.value)} className="min-w-[240px] flex-1" />
-        <Button variant="primary" disabled={!value} loading={busy && !!value} onClick={() => save(value)}>Opslaan</Button>
-        {status.configured && info.test && <Button onClick={runTest} loading={busy && !value}>Test</Button>}
+        <Input type="password" autoComplete="off" placeholder={status.configured ? "Nieuwe key om te vervangen" : "Plak hier je API key"} value={value} onChange={(e) => setValue(e.target.value)} className="min-w-[240px] flex-1" />
+        <Button variant="primary" disabled={!value} loading={busy === "save"} onClick={() => save(value)}>Opslaan</Button>
+        {status.configured && <Button onClick={runTest} loading={busy === "test"}>Verbinding testen</Button>}
         {status.configured && status.source === "ui" && <Button variant="ghost" onClick={() => save(null)}>Wissen</Button>}
       </div>
-      {test && <p className={cx("text-xs", test.ok ? "text-ok" : "text-bad")}>{test.message}</p>}
     </div>
   );
 }
@@ -223,10 +232,10 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
         <CardHeader title="Systeemstatus" />
         <div className="grid gap-3 p-5 text-sm sm:grid-cols-2 lg:grid-cols-4">
           {[
-            ["AI-scoring", sys.llm.provider === "heuristic" ? "Lokale heuristiek" : `${sys.llm.provider} · ${sys.llm.models.fast ?? ""} / ${sys.llm.models.smart ?? ""}`, sys.llm.provider !== "heuristic" && sys.llm.provider !== "error"],
-            ["Transcriptie", sys.transcriber ?? "Niet beschikbaar (upload SRT/VTT)", !!sys.transcriber && !sys.transcriber.startsWith("error")],
-            ["ffmpeg", sys.ffmpeg ? "Gevonden" : "Niet gevonden", sys.ffmpeg],
-            ["Gezichtsdetectie", sys.face_detector === "yunet" ? "YuNet (DNN)" : sys.face_detector === "haar" ? "Haar cascades" : "Geen", sys.face_detector !== "none"],
+            ["Clipselectie", sys.llm.provider === "heuristic" ? "Gratis basisanalyse (geen AI-key)" : `AI: ${sys.llm.provider} · ${sys.llm.models.fast ?? ""} / ${sys.llm.models.smart ?? ""}`, sys.llm.provider !== "heuristic" && sys.llm.provider !== "error"],
+            ["Transcriptie", sys.transcriber === "openai_whisper" ? "OpenAI Whisper" : sys.transcriber === "faster_whisper" ? "Lokaal (faster-whisper)" : sys.transcriber ? sys.transcriber : "Vul OpenAI-key in of upload .srt", !!sys.transcriber && !sys.transcriber.startsWith("error")],
+            ["Video-bewerking", sys.ffmpeg ? "Klaar (ffmpeg)" : "ffmpeg ontbreekt", sys.ffmpeg],
+            ["Gezicht volgen", sys.face_detector === "yunet" ? "Klaar (nauwkeurig model)" : sys.face_detector === "haar" ? "Klaar (standaardmodel)" : "Niet beschikbaar", sys.face_detector !== "none"],
           ].map(([label, value, ok]) => (
             <div key={label as string} className="rounded-xl border border-line bg-panel-2 p-3">
               <p className="flex items-center gap-1.5 text-xs text-muted">
@@ -241,7 +250,7 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
       </Card>
 
       <Card>
-        <CardHeader title="API keys" subtitle="Keys uit het dashboard worden versleuteld opgeslagen (APP_SECRET_KEY) en nooit teruggestuurd naar de browser." />
+        <CardHeader title="API keys" subtitle="Plak een key en klik Opslaan: de app test hem meteen. Keys worden versleuteld opgeslagen en nooit teruggestuurd naar de browser." />
         <div className="divide-y divide-line">
           {Object.keys(SECRET_INFO).map((name) => (
             <SecretRow key={name} name={name} status={data.secrets[name]} onSaved={(p) => mutate(p)} />
@@ -263,12 +272,12 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
               ))}
             </Select>
           </Field>
-          <Field label="LLM-provider" hint="Auto = OpenAI als die key er is, anders Anthropic, anders lokale heuristiek.">
+          <Field label="LLM-provider" hint="Automatisch = OpenAI als die key er is, anders Anthropic, anders de gratis basisanalyse.">
             <Select className="w-full" value={s.ai.llm_provider} onChange={(e) => update("ai", { llm_provider: e.target.value })}>
               <option value="auto">Automatisch</option>
               <option value="anthropic">Anthropic (Claude)</option>
               <option value="openai">OpenAI (of compatibel)</option>
-              <option value="heuristic">Alleen lokale heuristiek (gratis)</option>
+              <option value="heuristic">Alleen gratis basisanalyse (geen AI)</option>
             </Select>
           </Field>
           <Field label="Snel model (pass 1)" hint="Leeg = volgt de kwaliteitskeuze (gpt-5-mini / claude-haiku-4-5)">

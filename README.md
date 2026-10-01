@@ -10,7 +10,7 @@ Je voegt creators toe (bijv. Enzo Knol, Bankzitters, Hanwe, Gio, StukTV — of e
 
 ## Inhoud
 
-- [Snel starten in 11 stappen (geen technische kennis nodig)](#snel-starten-in-11-stappen)
+- [START HIER — in 8 stappen aan de slag](#start-hier)
 - [Welke API keys heb je nodig?](#welke-api-keys-heb-je-nodig)
 - [Waarom moet ik de video zelf aanleveren?](#waarom-moet-ik-de-video-zelf-aanleveren)
 - [Hoe kiest de app de clips? (eerlijk: wat is AI en wat niet)](#hoe-kiest-de-app-de-clips)
@@ -23,75 +23,61 @@ Je voegt creators toe (bijv. Enzo Knol, Bankzitters, Hanwe, Gio, StukTV — of e
 
 ---
 
-## Snel starten in 11 stappen
+## START HIER
 
-Je hebt nodig: een computer (Windows, Mac of Linux) en ongeveer 20 minuten.
+Geen technische kennis nodig. Je hebt een Windows-pc of Mac en ongeveer 20 minuten nodig. Je hoeft geen terminalcommando's te typen.
 
-### STAP 1 — Installeer Docker Desktop
-Ga naar [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/), klik op **Download** voor jouw systeem, installeer het en start Docker Desktop (wacht tot linksonder "Engine running" staat).
+### STAP 1 — Installeer Docker
+Ga naar [docker.com/products/docker-desktop](https://www.docker.com/products/docker-desktop/), klik op **Download** voor jouw computer, installeer het en open **Docker Desktop**. Wacht tot linksonder *Engine running* staat.
 
-### STAP 2 — Download ViralClip AI
-Klik op deze GitHub-pagina op de groene knop **Code** → **Download ZIP**, pak het ZIP-bestand uit en open een terminal in die map
-(Mac: rechtsklik op de map → *Nieuwe terminal bij map*; Windows: open de map, klik in de adresbalk, typ `powershell` en druk op Enter).
-
-Heb je Git? **Voer dit commando uit:**
-```bash
-git clone https://github.com/karstenhiemstra/viral-clip-ai.git
-cd viral-clip-ai
-```
-
-### STAP 3 — Maak je instellingenbestand
-**Voer dit commando uit:**
-```bash
-cp .env.example .env
-```
-Er staat nu een bestand `.env` in de map. Open het met Kladblok / TextEdit. Hier komen je API keys in (stap 4–6). Dit bestand gaat **nooit** naar GitHub.
-
-### STAP 4 — Maak de YouTube API key aan (gratis, nodig)
+### STAP 2 — Maak een YouTube API key (gratis)
 1. Ga naar [console.cloud.google.com](https://console.cloud.google.com/) en log in met je Google-account.
 2. Klik bovenaan op de projectkiezer → **Nieuw project** → naam `viralclip` → **Maken**.
-3. Ga naar [de YouTube Data API v3-pagina](https://console.cloud.google.com/apis/library/youtube.googleapis.com) en klik op **Inschakelen**.
-4. Klik links op **Credentials / Inloggegevens** → **+ Create credentials / Inloggegevens maken** → **API key** en kopieer de key.
-5. Zet hem in `.env` achter `YOUTUBE_API_KEY=`, bijvoorbeeld: `YOUTUBE_API_KEY=AIza...`
+3. Open [deze pagina](https://console.cloud.google.com/apis/library/youtube.googleapis.com) en klik op **Inschakelen**.
+4. Klik links op **Inloggegevens / Credentials** → **+ Inloggegevens maken** → **API-sleutel**. Kopieer de sleutel en bewaar hem even (bijv. in Kladblok).
 
-### STAP 5 — Maak de OpenAI API key aan (aanbevolen, betaald)
-1. Ga naar [platform.openai.com/api-keys](https://platform.openai.com/api-keys) en log in (of maak een account).
-2. Klik op **Create new secret key** → geef een naam → **Create secret key** en kopieer de key (je ziet hem maar één keer).
-3. Ga naar [Settings → Billing](https://platform.openai.com/settings/organization/billing/overview) en klik op **Add payment details**; zet er bijv. **$5** tegoed op (genoeg voor tientallen video's, zie [kosten](#wat-kost-het)).
-4. Zet de key in `.env` achter `OPENAI_API_KEY=`.
+### STAP 3 — Maak een OpenAI API key (aanbevolen)
+1. Ga naar [platform.openai.com/api-keys](https://platform.openai.com/api-keys) en log in of maak een account.
+2. Klik op **Create new secret key** → **Create secret key** en kopieer de sleutel (je ziet hem maar één keer).
+3. Ga naar [Billing](https://platform.openai.com/settings/organization/billing/overview) → **Add payment details** en zet er bijv. **$5** op. Dat is genoeg voor ongeveer 20–30 video's (zie [kosten](#wat-kost-het)).
 
-Geen key? Dan werkt de app ook, met een gratis maar minder slimme rekenmethode (zie [heuristiek](#zonder-ai-key-heuristische-modus)).
+Zonder OpenAI-key werkt de app ook, maar dan met de gratis basisanalyse ([zie hieronder](#zonder-ai-key-basisanalyse)).
 
-### STAP 6 — Kies een wachtwoord voor het dashboard (aanbevolen)
-Vul in `.env` bij `DASHBOARD_PASSWORD=` een wachtwoord in. Je logt dan in met gebruikersnaam `admin`. Sla `.env` op.
+### STAP 4 — Start de applicatie
+1. Klik op deze GitHub-pagina op de groene knop **Code** → **Download ZIP**. Pak het ZIP-bestand uit, bijvoorbeeld in *Documenten*.
+2. Open de uitgepakte map en **dubbelklik**:
+   - **Windows:** `start-windows.bat`
+   - **Mac:** `start-mac.command`. De eerste keer **rechtsklik** je erop → **Open** → **Open** (macOS vraagt dan toestemming).
+   - **Linux:** voer `./start-linux.sh` uit.
 
-### STAP 7 — Start de app
-**Voer dit commando uit:**
-```bash
-docker compose up -d --build
-```
-De eerste keer duurt dit 5–10 minuten. Daarna start hij in een paar seconden.
+De eerste keer duurt het 5–10 minuten: de app wordt gebouwd. Daarna opent je browser vanzelf. De volgende keren start hij in een paar seconden.
 
-### STAP 8 — Open het dashboard
-Ga in je browser naar **http://localhost:3000**. Bovenaan staat een checklist *"Aan de slag"* die je door de rest leidt.
-Keys kun je ook hier invullen of testen: **Settings → API keys** → plak de key → **Opslaan** → **Test**.
+### STAP 5 — Open het dashboard en vul je keys in
+1. Je browser opent **http://localhost:3000**. Gebeurt dat niet, typ het adres dan zelf in.
+2. Klik links op **Settings** → **API keys**.
+3. Plak de YouTube-sleutel en klik **Opslaan**. De app test hem meteen en toont **Verbonden** of uitleg wat er mis is.
+4. Doe hetzelfde met de OpenAI-sleutel.
 
-### STAP 9 — Voeg een creator toe
-Klik links op **Creators** → **Creator toevoegen** → typ `Enzo Knol` → **Zoek**. Kies onder *"Direct ophalen na toevoegen"* een periode (**laatste 24 uur / 7 dagen / 30 dagen**) en een aantal (**5 / 10 / 25 video's**) en klik bij het juiste kanaal op **Kies**. Later opnieuw ophalen: knop **Video's ophalen** in de lijst.
+### STAP 6 — Voeg een creator toe
+Klik links op **Creators** → **Creator toevoegen** → typ `Enzo Knol` → **Zoek**. Kies bij *Direct ophalen* een periode (laatste 24 uur, 7 of 30 dagen) en een aantal video's (5, 10 of 25). Klik bij het juiste kanaal op **Kies**.
 
-### STAP 10 — Lever de bronvideo aan
-Klik links op **Videos** en open een video met status *"Wacht op bron"*. Kies één van:
-- **Upload bron** — het MP4-bestand (bijv. uit het clipping-programma van de creator of je eigen video);
-- **Bron via link** — een deel-link van Google Drive, Dropbox of OneDrive;
-- **Transcript (SRT/VTT)** — ondertitels; de analyse start dan al, renderen volgt zodra het videobestand er is;
-- of zet het bestand in de map `data/inbox/` met het YouTube-video-ID in de naam, bijv. `vlog [dQw4w9WgXcQ].mp4`.
+Per creator zie je daarna de stappen *bron nodig → bezig → geanalyseerd → clips*.
 
-De analyse start automatisch; volg hem op **Analysis Queue**.
+### STAP 7 — Lever een video aan
+Klik links op **Videos**. Bij een video met **Bron nodig** klik je op **Bron aanleveren**, en dan één van deze:
+- **sleep het videobestand** in het vak, of klik **Bestand kiezen**;
+- **plak een deel-link** van Google Drive, Dropbox of OneDrive;
+- upload alleen **ondertitels (.srt)**: de analyse start dan al, en de clips worden gemaakt zodra de video er is;
+- of zet het bestand in de map `data/inbox`. De app toont de exacte bestandsnaam die je moet gebruiken.
 
-### STAP 11 — Bekijk en download je clips
-Op het **Dashboard** zie je *"🔥 3 new potential viral clips"* en per creator de beste clip (bijv. *Enzo Knol · 84*). Klik op een clip → bekijk de preview en de uitleg → **Download Clip**. Geef feedback met 🔥 Viral / 👍 Good / 👎 Bad / Reject: daarmee leert de app jouw smaak.
+Daarna gaat alles vanzelf: transcriptie → AI-analyse → beste clips → 9:16 met captions. Volg de voortgang op **Analysis Queue**.
+*Waarom niet automatisch van YouTube? Dat staat YouTube niet toe; zie [hieronder](#waarom-moet-ik-de-video-zelf-aanleveren).*
 
-**Stoppen:** `docker compose down` · **Bijwerken:** `git pull` en daarna `docker compose up -d --build` · **Logs bekijken:** `docker compose logs -f worker`
+### STAP 8 — Bekijk en download je clips
+Het **Dashboard** toont **🔥 Top Viral Clips**: #1, #2, #3… met creator, Viral Score (bijv. *Enzo Knol · 84/100*), een **Preview**-knop en een **Download**-knop. Geef feedback (🔥 / 👍 / 👎) op de clippagina; zo leert de app jouw smaak.
+
+**Stoppen:** dubbelklik `stop-windows.bat` (Windows), voer `./stop.sh` uit (Mac/Linux), of klik in Docker Desktop bij *viralclip* op **Stop**. Je clips en instellingen blijven bewaard in de map `data`.
+**Opnieuw starten:** dubbelklik weer het startbestand.
 
 ---
 
@@ -176,7 +162,7 @@ Viral Score = (80% Inhoud + 20% signalen) × strafpunten + comment-bonus (max +6
 
 **Kwaliteit/kosten** kies je in **Settings → AI & modellen**: *Budget* (gpt-5-mini voor alles), *Gebalanceerd* (aanbevolen) of *Beste kwaliteit*. Is een model niet beschikbaar voor jouw key, dan schakelt de app automatisch over naar het volgende (gpt-5 → gpt-5-mini → gpt-4.1). Is je tegoed op of je key ongeldig, dan zie je dat op het dashboard en gaat de analyse gratis verder met de heuristiek.
 
-### Zonder AI-key: heuristische modus
+### Zonder AI-key: basisanalyse
 
 Zonder OpenAI/Anthropic-key werkt alles, maar dan met vuistregels in plaats van een taalmodel: momenten komen uit luidheidspieken, comment-tijdstempels, scènewissels en "hook-woorden" (bijv. *wacht, wat?!*, vragen, uitroepen, getallen, emotiewoorden), en de 12 scores worden daaruit berekend. Dat is gratis en transparant, maar het **begrijpt geen humor of verhaal**. In de clipuitleg staat altijd welke modus is gebruikt (*Modus: heuristic* of *llm*).
 
@@ -220,7 +206,7 @@ De werkelijke kosten worden per analyse bijgehouden (videopagina → *Laatste an
 
 - De worker kijkt standaard **elke 120 minuten** per creator of er nieuwe uploads zijn (Settings → Discovery). 10 creators is geen probleem: elke scan kost ~3 YouTube-quota-units (+1 per nieuwe video voor comments), dus ~400 van de 10.000 gratis units per dag.
 - Filters (globaal én per creator): periode (vandaag / 24 uur / 7 dagen / 30 dagen / eigen periode / alles), max. aantal video's per scan (5/10/25/50/alle), min./max. lengte, geen Shorts, geen livestreams, titelwoorden uitsluiten, minimale views.
-- Een video die al geanalyseerd is, wordt **nooit opnieuw** geanalyseerd door een scan. Een video die door een filter werd overgeslagen, kun je terughalen via **Video's ophalen** (dan worden de filters opnieuw toegepast).
+- Een video die al geanalyseerd is, wordt **nooit opnieuw** geanalyseerd door een scan. Een video die door een filter werd overgeslagen, kun je terughalen via **Ophalen** bij de creator (dan worden de filters opnieuw toegepast), of door zelf de bronvideo aan te leveren.
 - Per creator: prioriteit (bepaalt de volgorde in de wachtrij), taal, clipduur, max. clips per video, automatisch analyseren aan/uit.
 
 ---
@@ -239,7 +225,8 @@ De werkelijke kosten worden per analyse bijgehouden (videopagina → *Laatste an
 | Invoer | Pydantic-validatie op alle endpoints, bestandstype- en groottelimiet op uploads (`MAX_UPLOAD_GB`), SSRF-bescherming bij deel-links (geen interne adressen, geen YouTube-downloads). |
 | Headers | `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`. |
 
-**Voor productie minimaal zetten:** `DASHBOARD_PASSWORD`, `API_AUTH_TOKEN`, `APP_SECRET_KEY`, `POSTGRES_PASSWORD`. Een sterke waarde maken: `python3 -c "import secrets;print(secrets.token_urlsafe(48))"`.
+**Automatisch geregeld door het startscript:** bij de eerste start maakt het een `.env` met willekeurige waarden voor `APP_SECRET_KEY`, `API_AUTH_TOKEN` en `POSTGRES_PASSWORD`. Op je eigen computer is verder niets nodig; het dashboard is alleen vanaf die computer bereikbaar.
+**Wil je het op een server of in je netwerk zetten:** zet ook `DASHBOARD_PASSWORD` (en volg [deployment](#deployment)). Zelf een sterke waarde maken: `python3 -c "import secrets;print(secrets.token_urlsafe(48))"`.
 
 ---
 
@@ -284,7 +271,9 @@ viral-clip-ai/
 │   ├── components/ lib/
 │   └── proxy.ts              Basic-auth voor het dashboard
 ├── docs/ALGORITHM.md         uitleg selectie-algoritme & scoring
-├── scripts/                  dev.sh, check_secrets.py
+├── start-windows.bat · start-mac.command · start-linux.sh · stop-windows.bat · stop.sh
+│                             één-klik starten/stoppen (roepen scripts/start.ps1 / scripts/start.sh aan)
+├── scripts/                  start.sh, start.ps1, dev.sh, check_secrets.py
 ├── docker-compose.yml        Postgres + API + worker + dashboard
 ├── .env.example · Makefile · .github/workflows/ci.yml
 ```
@@ -369,19 +358,21 @@ Meer rekenkracht: `docker compose up -d --scale worker=3` (de queue gebruikt `SK
 
 | Probleem | Oplossing |
 |---|---|
-| *"De YouTube API key is ongeldig"* | Opnieuw kopiëren (zonder spaties) en in Settings op **Test** klikken. |
-| *"De YouTube Data API v3 staat nog niet aan"* | Stap 4.3: de API inschakelen in Google Cloud voor hetzelfde project als de key. |
+| Settings toont **Niet verbonden** bij YouTube | Lees de melding eronder. Meestal: sleutel opnieuw kopiëren (zonder spaties) → **Opslaan**. Of de API staat nog niet aan (STAP 2.3). |
+| *"De YouTube Data API v3 staat nog niet aan"* | STAP 2.3: de API inschakelen in Google Cloud, in hetzelfde project als de key. |
 | *"YouTube API quota is op"* | Wacht tot 09:00 Nederlandse tijd (middernacht in Californië). Zoek creators op @handle of URL i.p.v. op naam (1 i.p.v. 100 units). |
-| *"Je OpenAI-tegoed is op"* | platform.openai.com → Settings → Billing → tegoed toevoegen. Intussen werkt de gratis heuristiek. |
-| *"Ongeldige OPENAI_API_KEY"* | Nieuwe key maken (stap 5) en in Settings plakken → **Test**. |
-| Video blijft op **Wacht op bron** | Normaal: lever het bestand, een deel-link of ondertitels aan (stap 10). |
+| *"Je OpenAI-tegoed is op"* | platform.openai.com → Settings → Billing → tegoed toevoegen, daarna **Verbinding testen**. Intussen werkt de gratis basisanalyse. |
+| *"Ongeldige OPENAI_API_KEY"* | Nieuwe key maken (STAP 3) en in Settings plakken → **Opslaan**. |
+| Video blijft op **Bron nodig** | Normaal: klik **Bron aanleveren** en lever het bestand, een deel-link of ondertitels aan (STAP 7). |
 | Deel-link werkt niet | Google Drive: zet delen op *"Iedereen met de link"*. Dropbox/OneDrive: gebruik de deel-link van het bestand, niet van de map. |
 | Preview speelt niet af | Gebruik Chrome, Edge, Safari of Firefox (H.264). Download werkt altijd. |
 | *"ffmpeg is niet gevonden"* | Gebruik Docker, of installeer ffmpeg (`brew install ffmpeg` / `apt install ffmpeg`). |
-| Scores voelen willekeurig | Zonder AI-key draait de heuristiek. Stel een OpenAI-key in en geef feedback (het persoonlijke model start vanaf 12 beoordelingen). |
+| Clips zijn matig | Zonder AI-key draait de basisanalyse. Stel een OpenAI-key in en geef feedback (het persoonlijke model start vanaf 12 beoordelingen). |
 | Reframing volgt het gezicht niet goed | Kies per clip *Volg spreker*, *Midden crop* of *Blur-fit* en render opnieuw. |
+| Start-script blijft wachten / foutmelding | Staat Docker Desktop aan (*Engine running*)? Start het script opnieuw. Details: `docker compose logs --tail 50`. |
 | Jobs blijven hangen | `docker compose logs -f worker`. Vastgelopen jobs worden na 30 min opnieuw ingepland; retry/annuleer op de Queue-pagina. |
-| Inlogvenster blijft terugkomen | Gebruikersnaam `admin` (of `DASHBOARD_USER`) met het wachtwoord uit `.env`; na wijzigen: `docker compose up -d`. |
+| Mac: *"start-mac.command kan niet worden geopend"* | Rechtsklik → **Open** → **Open**. Of open Terminal in de map en typ `bash start-mac.command`. |
+| Inlogvenster | Alleen als je `DASHBOARD_PASSWORD` in `.env` hebt gezet: gebruikersnaam `admin` met dat wachtwoord. |
 | `Backend niet bereikbaar` | `docker compose ps` — draait `api`? Lokaal moet `BACKEND_URL=http://localhost:8000` zijn. |
 
 ---

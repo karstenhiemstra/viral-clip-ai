@@ -49,44 +49,6 @@ export function UploadMediaButton({ video, onDone, size = "sm" }: { video: Video
 const LINK_HINT =
   "Deel-link van de rechthebbende: Google Drive (\"Iedereen met de link\"), Dropbox, OneDrive of een directe link naar een .mp4. YouTube-links worden bewust niet gedownload.";
 
-export function ImportLinkButton({ video, onDone, size = "sm" }: { video: Video; onDone?: () => void; size?: "sm" | "md" }) {
-  const toast = useToast();
-  const [open, setOpen] = useState(false);
-  const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    try {
-      await api(`/api/videos/${video.id}/import-url`, { method: "POST", json: { url } });
-      toast("Download gestart — daarna begint de analyse automatisch (zie Wachtrij)");
-      setUrl("");
-      setOpen(false);
-      onDone?.();
-    } catch (err) {
-      toast(errorText(err), "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <>
-      <Button size={size} icon={<CloudDownload className="size-3.5" />} onClick={() => setOpen(true)}>Bron via link</Button>
-      <Modal open={open} onClose={() => setOpen(false)} title="Bronvideo importeren via link">
-        <form onSubmit={submit} className="space-y-4">
-          <Field label="Deel-link" hint={LINK_HINT}>
-            <Input autoFocus required type="url" placeholder="https://drive.google.com/file/d/…" value={url} onChange={(e) => setUrl(e.target.value)} />
-          </Field>
-          <div className="flex justify-end gap-2">
-            <Button onClick={() => setOpen(false)}>Annuleren</Button>
-            <Button type="submit" variant="fire" loading={busy}>Importeren & analyseren</Button>
-          </div>
-        </form>
-      </Modal>
-    </>
-  );
-}
-
 export function UploadTranscriptButton({ video, onDone }: { video: Video; onDone?: () => void }) {
   const toast = useToast();
   const input = useRef<HTMLInputElement>(null);

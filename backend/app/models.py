@@ -50,6 +50,7 @@ class VideoStatus:
     SKIPPED = "skipped"  # filtered out (too short, too old, ...)
     QUEUED = "queued"
     AWAITING_MEDIA = "awaiting_media"  # needs a video file or transcript from an allowed source
+    AWAITING_KEY = "awaiting_key"  # has the video, but transcription needs an OpenAI key (or an .srt)
     ANALYZING = "analyzing"
     ANALYZED = "analyzed"
     FAILED = "failed"

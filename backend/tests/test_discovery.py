@@ -133,6 +133,12 @@ def test_scan_uses_official_api_filters_and_queues(db, stub):
     assert again.new == 0 and again.queued == 0
     assert len(db.scalars(select(Job).where(Job.type == JobType.ANALYZE_VIDEO)).all()) == 2
 
+    # The Creators page shows the workflow per creator: source needed -> analysing -> analysed -> clips
+    from app.api.creators import _stats
+
+    st = _stats(db)[creator.id]
+    assert (st["new_videos"], st["analyzing_videos"], st["analyzed_videos"], st["skipped_videos"]) == (0, 2, 0, 2)
+
 
 def test_manual_fetch_with_period_and_count_reconsiders_skipped(db, stub):
     creator = _creator(db, stub)

@@ -8,7 +8,8 @@ import { Suspense, useState } from "react";
 import { ScoreBadge } from "@/components/clips";
 import { errorText, useToast } from "@/components/toast";
 import { Badge, Button, Card, EmptyState, Input, PageHeader, ProgressBar, Select, Spinner } from "@/components/ui";
-import { AddVideoModal, ImportLinkButton, UploadMediaButton } from "@/components/uploads";
+import { SourceButton } from "@/components/source";
+import { AddVideoModal } from "@/components/uploads";
 import { api, useApi } from "@/lib/api";
 import { compactNumber, formatDuration, relativeTime, VIDEO_STATUS } from "@/lib/format";
 import type { Creator, Video } from "@/lib/types";
@@ -75,7 +76,9 @@ function VideosInner() {
         </Select>
         <Select value={status} onChange={(e) => setParam("status", e.target.value)}>
           <option value="">Alle statussen</option>
+          <option value="new">Nieuw (bron aanleveren)</option>
           <option value="pending">In behandeling</option>
+          <option value="in_progress">Bezig met analyseren</option>
           {Object.entries(VIDEO_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
         </Select>
       </div>
@@ -134,12 +137,7 @@ function VideosInner() {
                         {v.clip_count} clips {v.best_score != null && <ScoreBadge score={v.best_score} />}
                       </Link>
                     )}
-                    {!v.has_media && v.status !== "skipped" && (
-                      <>
-                        <UploadMediaButton video={v} onDone={() => mutate()} />
-                        <ImportLinkButton video={v} onDone={() => mutate()} />
-                      </>
-                    )}
+                    {!v.has_media && <SourceButton video={v} onDone={() => mutate()} />}
                     <Button size="sm" variant="ghost" title={v.status === "analyzed" ? "Opnieuw analyseren" : "Analyseren"} onClick={() => analyze(v)}><Wand2 className="size-3.5" /></Button>
                     {v.status !== "skipped" && v.status !== "analyzed" && (
                       <Button size="sm" variant="ghost" title="Overslaan" onClick={() => skip(v)}><Ban className="size-3.5" /></Button>

@@ -11,6 +11,7 @@ downloads such a link safely:
 
 from __future__ import annotations
 
+import base64
 import ipaddress
 import os
 import re
@@ -50,7 +51,13 @@ def normalize_share_link(url: str) -> str:
         q = parse_qs(u.query)
         q["dl"] = ["1"]
         return urlunparse(u._replace(query=urlencode({k: v[0] for k, v in q.items()})))
-    if host in ("1drv.ms", "onedrive.live.com") and "download" not in u.query:
+    if host in ("1drv.ms", "onedrive.live.com", "onedrive.com", "www.onedrive.com"):
+        # Personal OneDrive: Microsoft's documented "shares" endpoint turns a public sharing link into
+        # the file itself: u! + unpadded base64url of the link.
+        token = base64.urlsafe_b64encode(url.strip().encode()).decode().rstrip("=")
+        return f"https://api.onedrive.com/v1.0/shares/u!{token}/root/content"
+    if host.endswith("sharepoint.com") and "download=1" not in u.query:
+        # OneDrive for work/school (SharePoint) sharing links download directly with download=1.
         sep = "&" if u.query else ""
         return urlunparse(u._replace(query=u.query + sep + "download=1"))
     return url.strip()

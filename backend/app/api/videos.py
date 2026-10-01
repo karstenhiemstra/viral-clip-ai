@@ -81,7 +81,11 @@ def list_videos(
     if creator_id is not None:
         filters.append(Video.creator_id == creator_id)
     if status == "pending":
-        filters.append(Video.status.in_((VideoStatus.QUEUED, VideoStatus.ANALYZING, VideoStatus.AWAITING_MEDIA)))
+        filters.append(Video.status.in_((VideoStatus.QUEUED, VideoStatus.ANALYZING, VideoStatus.AWAITING_MEDIA, VideoStatus.AWAITING_KEY)))
+    elif status == "new":
+        filters.append(Video.status.in_((VideoStatus.DISCOVERED, VideoStatus.AWAITING_MEDIA, VideoStatus.AWAITING_KEY)))
+    elif status == "in_progress":
+        filters.append(Video.status.in_((VideoStatus.QUEUED, VideoStatus.ANALYZING)))
     elif status:
         filters.append(Video.status == status)
     if q:

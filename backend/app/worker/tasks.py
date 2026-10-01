@@ -108,10 +108,10 @@ def handle_analyze_video(ctx: JobContext) -> str:
             except LLMError as e:
                 raise AnalysisError(str(e)) from e
             out = analyze_video(db, video, creator, rs, llm=llm, progress=lambda p, m: ctx.progress(p, "analyse", m))
-        except JobWaiting:
+        except JobWaiting as w:
             db.rollback()
             db.delete(run)
-            video.status = VideoStatus.AWAITING_MEDIA
+            video.status = VideoStatus.AWAITING_KEY if w.reason == "api_key" else VideoStatus.AWAITING_MEDIA
             db.commit()
             raise
         except JobCancelled:

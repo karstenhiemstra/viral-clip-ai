@@ -51,6 +51,7 @@ AVOID
 - Intros, greetings, "today we are going to...", sponsor reads, merch, outros and calls to subscribe.
 - Moments that only make sense with earlier context that cannot be included briefly.
 - Logistics, filler and long explanations without a turn.
+- Spans that cross a topic change: one clip = one story. Never glue the punchline of one story to the start of the next segment ("ok, now we go shopping...").
 
 HOW TO ANSWER
 - Refer to sentences only by their ids, for example 41 for [s41]. start_sentence is the first sentence of the clip, end_sentence the last one. Use the timestamps to keep every span close to the requested duration.
@@ -163,7 +164,7 @@ scores: every dimension from 0 to 100. Be strict and calibrated:
   rewatch: is there a reason to watch it again (fast punchline, hidden detail, quotable line, satisfying loop)?
 flags: only the ones that apply - needs_context, inside_joke, starts_mid_sentence, ends_mid_sentence, weak_payoff, sponsor_or_ad, intro_or_outro, low_energy, repetitive, sensitive.
 verdict: skip, maybe, good or great.
-start_sentence / end_sentence: the best edit. You may tighten, or extend into the CONTEXT sentences when the setup or payoff lives there. Start directly on the hook: drop greetings, filler and setup the viewer does not need. End right after the payoff or reaction. Respect the target length.
+start_sentence / end_sentence: the best edit. You may tighten, or extend into the CONTEXT sentences when the setup or payoff lives there. Start directly on the hook: drop greetings, filler and setup the viewer does not need. End right after the payoff or reaction. Keep it inside one story (never run into the next topic). Respect the target length.
 category: the main type of moment.
 Packaging, written in the requested output language:
   title: a short on-screen hook text for the post (max 70 characters, no hashtags, no false claims).

@@ -51,6 +51,29 @@ def test_secrets_are_masked_and_never_returned(client):
     assert r.json()["secrets"]["openai_api_key"]["configured"] is False
 
 
+def test_key_status_connected_or_not_with_beginner_message(client, db):
+    from app.services.settings_store import set_secret
+
+    r = client.post("/api/settings/secrets", json={"name": "youtube_api_key", "value": "wrong-key"})
+    yt = r.json()["secrets"]["youtube_api_key"]
+    assert yt["status"] == "error" and "ongeldig" in yt["message"]  # tested automatically on save
+    dash = client.get("/api/dashboard").json()
+    assert any("YouTube API key werkt niet" in w["text"] for w in dash["warnings"])
+    assert not next(s for s in dash["setup"] if s["key"] == "youtube_api_key")["done"]
+
+    r = client.post("/api/settings/secrets", json={"name": "youtube_api_key", "value": "good-youtube-key"})
+    assert r.json()["secrets"]["youtube_api_key"]["status"] == "connected"
+    r = client.post("/api/settings/secrets/youtube_api_key/test")
+    assert r.json()["ok"] is True and r.json()["settings"]["secrets"]["youtube_api_key"]["status"] == "connected"
+
+    set_secret(db, "youtube_api_key", "another-key")  # a different key is not "connected" until tested
+    assert client.get("/api/settings").json()["secrets"]["youtube_api_key"]["status"] == "untested"
+    r = client.post("/api/settings/secrets", json={"name": "openai_api_key", "value": "sk-good-123456"})
+    assert r.json()["secrets"]["openai_api_key"]["status"] == "connected"
+    assert client.get("/api/settings").json()["secrets"]["anthropic_api_key"]["status"] == "missing"
+    assert client.post("/api/settings/secrets/nope/test").status_code == 422
+
+
 def test_creator_search_requires_key_for_names(client):
     r = client.get("/api/creators/search", params={"q": "Enzo Knol"})
     assert r.status_code == 400
@@ -222,3 +245,29 @@ def test_inbox_import_matches_youtube_id(db, test_video):
     assert v.media_key and v.media_origin == "inbox"
     assert not target.exists() and (inbox / "_imported").exists() is False  # media is moved into storage
     assert db.scalar(select(Job).where(Job.video_id == v.id, Job.type == JobType.ANALYZE_VIDEO)) is not None
+
+
+def test_video_without_transcription_key_waits_and_resumes(client, db, test_video):
+    """No OpenAI key and no subtitles: the analysis waits (with a clear message) instead of failing,
+    and resumes as soon as a working key is saved or subtitles are uploaded."""
+    from app.models import Job, JobStatus, JobType
+
+    r = client.post("/api/videos/upload", files={"file": ("vlog.mp4", test_video.open("rb"), "video/mp4")}, data={"title": "Vlog"})
+    vid = r.json()["id"]
+    Worker("e2e").drain()
+    video = client.get(f"/api/videos/{vid}").json()
+    assert video["status"] == VideoStatus.AWAITING_KEY and video["job_status"] == "waiting"
+    assert "OpenAI API key" in video["job_message"] and "pip" not in video["job_message"]
+    assert any("wachten op transcriptie" in w["text"] for w in client.get("/api/dashboard").json()["warnings"])
+
+    r = client.post("/api/settings/secrets", json={"name": "openai_api_key", "value": "sk-good-key-123"})
+    assert r.json()["secrets"]["openai_api_key"]["status"] == "connected"
+    db.expire_all()
+    job = db.query(Job).filter(Job.video_id == vid, Job.type == JobType.ANALYZE_VIDEO).one()
+    assert job.status == JobStatus.QUEUED  # resumed by saving the key
+
+    client.post("/api/settings/secrets", json={"name": "openai_api_key", "value": ""})  # tests stay offline
+    srt = _srt_from_lines(SAMPLE_LINES[:8])
+    client.post(f"/api/videos/{vid}/transcript", files={"file": ("t.srt", io.BytesIO(srt.encode()), "text/plain")})
+    Worker("e2e").drain()
+    assert client.get(f"/api/videos/{vid}").json()["status"] == VideoStatus.ANALYZED

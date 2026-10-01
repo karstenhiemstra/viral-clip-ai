@@ -51,6 +51,7 @@ FLAG_PENALTIES: dict[str, float] = {
     "low_energy": 0.93,
     "repetitive": 0.93,
     "sensitive": 0.85,
+    "mixes_topics": 0.85,  # two unrelated parts of the video glued together
 }
 
 VERDICT_CAPS: dict[str, float] = {"skip": 45.0, "maybe": 76.0, "good": 92.0, "great": 100.0}

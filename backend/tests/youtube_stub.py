@@ -218,7 +218,7 @@ class YouTubeStub:
         return YouTubeClient(api_key, http=httpx.Client(transport=transport),
                              api_base="https://www.googleapis.com/youtube/v3", web_base="https://www.youtube.com")
 
-    def serve(self, port: int) -> ThreadingHTTPServer:
+    def serve(self, port: int, host: str = "127.0.0.1") -> ThreadingHTTPServer:
         stub = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -238,6 +238,6 @@ class YouTubeStub:
             def log_message(self, *args):
                 pass
 
-        server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        server = ThreadingHTTPServer((host, port), Handler)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server

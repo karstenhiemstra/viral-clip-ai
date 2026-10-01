@@ -43,6 +43,15 @@ def db(tmp_path):
     engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+def _offline_key_checks(monkeypatch):
+    """Saving a key triggers a live connection test; tests never talk to YouTube/OpenAI/Anthropic."""
+    import app.api.settings as settings_api
+
+    monkeypatch.setattr(settings_api, "_check_youtube", lambda key: (key == "good-youtube-key", "De YouTube API key is ongeldig of verkeerd gekopieerd."))
+    monkeypatch.setattr(settings_api, "_check_llm", lambda db, name, key: (key.startswith("sk-good"), "Ongeldige OPENAI_API_KEY."))
+
+
 @pytest.fixture()
 def client(db):
     from fastapi.testclient import TestClient

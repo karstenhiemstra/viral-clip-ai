@@ -1,7 +1,8 @@
 """Stage 10 - clip optimisation: exact, hook-first start/end times.
 
 Rules (in order):
-1. Drop leading sentences that are pure filler/greetings and trailing outro sentences.
+1. Drop leading sentences that are pure filler/greetings and trailing outro sentences, and never
+   grow a clip across a clear topic change (``VideoContext.topic_breaks``).
 2. Within the allowed span, pick the contiguous sub-span that best fits the duration range, prefers
    starting on the hook sentence, keeps the loudest reaction / audience hotspot and avoids starting on
    filler or a context-dependent opener ("Hij...", "Maar...").
@@ -17,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from app.ai.signals import VideoContext, window_features
+from app.ai.signals import VideoContext, signal_score, window_features
 from app.ai.transcript import (
     Sentence,
     contains_outro,
@@ -28,6 +29,7 @@ from app.ai.transcript import (
 from app.video.audio_features import clip_features, loud_tail
 
 _END_PUNCT = re.compile(r"[.!?…]+[\"'”’)]*$")
+TOPIC_BREAK = 0.6  # a topic change at least this strong is not crossed when growing a clip
 
 
 @dataclass
@@ -95,6 +97,7 @@ def _subspan_score(ctx: VideoContext, a: int, b: int, rules: DurationRules, hook
         score -= 2
     if contains_outro(s_a.text) or contains_outro(s_b.text):
         score -= 10
+    score -= 14 * ctx.break_between(a, b)
     return score
 
 
@@ -111,12 +114,37 @@ def _key_times(ctx: VideoContext, a: int, b: int) -> list[float]:
     return out
 
 
+def _strongest_part(ctx: VideoContext, s0: int, s1: int) -> tuple[int, int]:
+    parts: list[tuple[int, int]] = []
+    a = s0
+    for i in range(s0, s1):
+        if ctx.topic_breaks[i] >= TOPIC_BREAK:
+            parts.append((a, i))
+            a = i + 1
+    parts.append((a, s1))
+
+    def strength(part: tuple[int, int]) -> float:
+        a, b = part
+        lo, hi = ctx.sentences[a].start, ctx.sentences[b].end
+        feats = window_features(ctx, lo, hi, ctx.words[ctx.sentences[a].w0 : ctx.sentences[b].w1])
+        filler = all(is_filler_sentence(ctx.sentences[k], ctx.words) or contains_outro(ctx.sentences[k].text) for k in range(a, b + 1))
+        return signal_score(feats) - (40 if filler else 0) + 0.5 * (hi - lo)
+
+    return max(parts, key=strength)
+
+
 def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_s: int | None) -> tuple[int, int]:
     """Best contiguous sentence span inside [s0, s1], extending outward when the span is too short."""
     n = len(ctx.sentences)
     s0, s1 = max(0, min(s0, n - 1)), max(0, min(s1, n - 1))
     if s1 < s0:
         s0, s1 = s1, s0
+    # 0. one story per clip (heuristic mode): a span that contains a clear topic change is cut there,
+    #    keeping the part with the strongest signals; the clip then starts on that part's first sentence.
+    #    (An LLM-chosen span, hook_s=None, is trusted; it only gets the "mixes_topics" flag.)
+    if hook_s is not None and ctx.break_between(s0, s1) >= TOPIC_BREAK:
+        s0, s1 = _strongest_part(ctx, s0, s1)
+        hook_s = s0
     # 1. strip filler/outro edges
     while s0 < s1 and (is_filler_sentence(ctx.sentences[s0], ctx.words) or contains_outro(ctx.sentences[s0].text)):
         s0 += 1
@@ -128,6 +156,7 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
         prev = ctx.sentences[s0 - 1]
         if (
             ctx.sentences[s0].start - prev.end < 1.5
+            and ctx.break_between(s0 - 1, s0) < TOPIC_BREAK
             and not is_filler_sentence(prev, ctx.words)
             and not contains_outro(prev.text)
             and not starts_with_context_opener(prev.text)
@@ -140,7 +169,12 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
         grew = False
         if s1 + 1 < n:
             gap = ctx.sentences[s1 + 1].start - ctx.sentences[s1].end
-            if gap < 2.0 and _span_duration(ctx, s0, s1 + 1) <= hard_max and not contains_outro(ctx.sentences[s1 + 1].text):
+            if (
+                gap < 2.0
+                and _span_duration(ctx, s0, s1 + 1) <= hard_max
+                and not contains_outro(ctx.sentences[s1 + 1].text)
+                and ctx.break_between(s1, s1 + 1) < TOPIC_BREAK
+            ):
                 s1 += 1
                 grew = True
         if _span_duration(ctx, s0, s1) >= rules.min_seconds:
@@ -148,7 +182,12 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
         if s0 - 1 >= 0:
             prev = ctx.sentences[s0 - 1]
             gap = ctx.sentences[s0].start - prev.end
-            if gap < 2.0 and not is_filler_sentence(prev, ctx.words) and _span_duration(ctx, s0 - 1, s1) <= hard_max:
+            if (
+                gap < 2.0
+                and not is_filler_sentence(prev, ctx.words)
+                and _span_duration(ctx, s0 - 1, s1) <= hard_max
+                and ctx.break_between(s0 - 1, s0) < TOPIC_BREAK
+            ):
                 s0 -= 1
                 grew = True
         if not grew:
@@ -164,12 +203,30 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
             and after["peak_z"] > max(1.8, inside["peak_z"] + 0.4)
             and nxt.start - ctx.sentences[s1].end < 2.0
             and not contains_outro(nxt.text)
+            and ctx.break_between(s1, s1 + 1) < TOPIC_BREAK
         ):
             s1 += 1
             while _span_duration(ctx, s0, s1) > hard_max and s0 < s1 and (hook_s is None or s0 < hook_s):
                 s0 += 1
+    # 2c. escalation: while the same story keeps its energy (the next sentence is about as loud as the
+    #     loudest moment so far), keep going: stories peak at the end (the reveal, the punchline).
+    soft_max = rules.max_seconds + 1.0
+    while ctx.audio is not None and s1 + 1 < n:
+        inside = clip_features(ctx.audio, ctx.sentences[s0].start, ctx.sentences[s1].end)
+        nxt = ctx.sentences[s1 + 1]
+        after = clip_features(ctx.audio, nxt.start, nxt.end)
+        if not (
+            after.get("available")
+            and after["peak_z"] >= max(1.2, inside["peak_z"] - 0.3)
+            and nxt.start - ctx.sentences[s1].end < 1.5
+            and _span_duration(ctx, s0, s1 + 1) <= soft_max
+            and not contains_outro(nxt.text)
+            and ctx.break_between(s1, s1 + 1) < TOPIC_BREAK
+        ):
+            break
+        s1 += 1
     # 3. if too long, search the best sub-span
-    if _span_duration(ctx, s0, s1) > rules.max_seconds:
+    if _span_duration(ctx, s0, s1) > soft_max:
         key_times = _key_times(ctx, s0, s1)
         best, best_score = (s0, s1), float("-inf")
         for a in range(s0, s1 + 1):
@@ -228,6 +285,8 @@ def optimize_boundaries(
         flags.append("starts_mid_sentence")
     if not _END_PUNCT.search(last.text) and next_start - last.end < 0.3:
         flags.append("ends_mid_sentence")
+    if ctx.break_between(s0, s1) >= 0.8:
+        flags.append("mixes_topics")
 
     segments: list[tuple[float, float]] = [(start, end)]
     if rules.remove_silences:

@@ -166,6 +166,9 @@ GREETING_OUTRO = (
     "see you next time", "discount code", "sponsored", "thanks for watching", "bedankt voor het kijken",
     "laat het weten in de comments", "laat het me weten in de comments", "laat een comment achter", "link in bio",
     "let me know in the comments", "drop a comment",
+    # sponsor reads
+    "mede mogelijk gemaakt", "met de code", "procent korting", "% korting", "gebruik code", "use code",
+    "sponsored by", "this video is brought to you", "affiliate",
 )
 
 

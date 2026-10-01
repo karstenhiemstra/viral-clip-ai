@@ -275,14 +275,48 @@ def mask(value: str) -> str:
     return f"{value[:3]}…{value[-4:]}"
 
 
+def _fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:16] if value else ""
+
+
+def _checks(db: Session) -> dict[str, dict[str, Any]]:
+    row = db.get(AppSetting, "secret_checks")
+    return dict(row.value) if row is not None and isinstance(row.value, dict) else {}
+
+
+def record_secret_check(db: Session, name: str, ok: bool, message: str) -> None:
+    """Remember the last connection test of a key (tied to that exact key via a fingerprint)."""
+    from app.models import utcnow
+
+    checks = _checks(db)
+    checks[name] = {"ok": ok, "message": message[:500], "checked_at": utcnow().isoformat() + "Z",
+                    "fingerprint": _fingerprint(get_secret(db, name))}
+    row = db.get(AppSetting, "secret_checks")
+    if row is None:
+        db.add(AppSetting(key="secret_checks", value=checks))
+    else:
+        row.value = checks
+    db.commit()
+
+
 def secrets_status(db: Session) -> dict[str, dict[str, Any]]:
+    """Per key: configured? where from? and the result of the last connection test of THIS key:
+    status = missing | connected | error | untested."""
     stored = _stored_secrets(db)
+    checks = _checks(db)
     out: dict[str, dict[str, Any]] = {}
     for name in SECRET_NAMES:
         value = get_secret(db, name)
+        check = checks.get(name) or {}
+        if check.get("fingerprint") != _fingerprint(value):
+            check = {}  # the key changed since the last test
+        status = "missing" if not value else ("untested" if not check else ("connected" if check.get("ok") else "error"))
         out[name] = {
             "configured": bool(value),
             "source": "ui" if name in stored else ("env" if value else None),
             "masked": mask(value),
+            "status": status,
+            "message": check.get("message"),
+            "checked_at": check.get("checked_at"),
         }
     return out

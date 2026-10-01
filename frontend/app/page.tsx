@@ -1,13 +1,14 @@
 "use client";
 
-import { ArrowRight, CheckCircle2, Flame, Hourglass, ListOrdered, Sparkles, TriangleAlert, Users } from "lucide-react";
+import { ArrowRight, CheckCircle2, Download, Flame, Hourglass, ListOrdered, Play, Sparkles, TriangleAlert, Users } from "lucide-react";
 import Link from "next/link";
+import { useState } from "react";
 
-import { ClipCard, ScoreBadge } from "@/components/clips";
-import { Card, CardHeader, EmptyState, LinkButton, PageHeader, ProgressBar, Spinner } from "@/components/ui";
+import { ClipPlayer, ScoreBadge } from "@/components/clips";
+import { Badge, Button, Card, CardHeader, EmptyState, LinkButton, Modal, PageHeader, ProgressBar, Spinner } from "@/components/ui";
 import { useApi } from "@/lib/api";
-import { formatDuration, money } from "@/lib/format";
-import type { Dashboard } from "@/lib/types";
+import { CATEGORY_LABELS, CLIP_STATUS, formatDuration, money } from "@/lib/format";
+import type { Clip, Dashboard } from "@/lib/types";
 
 function Stat({ label, value, hint, accent }: { label: string; value: React.ReactNode; hint?: React.ReactNode; accent?: boolean }) {
   return (
@@ -58,6 +59,73 @@ function SetupChecklist({ steps }: { steps: Dashboard["setup"] }) {
   );
 }
 
+function TopClipsList({ clips }: { clips: Clip[] }) {
+  const [preview, setPreview] = useState<Clip | null>(null);
+  return (
+    <Card>
+      <div className="divide-y divide-line">
+        {clips.map((c, i) => {
+          const st = CLIP_STATUS[c.status];
+          return (
+            <div key={c.id} className="flex flex-wrap items-center gap-4 px-4 py-3 sm:flex-nowrap sm:px-5">
+              <span className={`w-8 shrink-0 text-center text-lg font-extrabold tabular-nums ${i < 3 ? "fire-text" : "text-muted"}`}>#{i + 1}</span>
+              <button onClick={() => setPreview(c)} className="relative aspect-[9/16] w-12 shrink-0 overflow-hidden rounded-md border border-line bg-panel-2" title="Preview">
+                {(c.thumbnail_url || c.video_thumbnail) && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={c.thumbnail_url ?? c.video_thumbnail ?? ""} alt="" className="size-full object-cover" />
+                )}
+              </button>
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-2 text-sm">
+                  <span className="font-semibold">{c.creator_name ?? "Eigen upload"}</span>
+                  <ScoreBadge score={c.viral_score} />
+                  <span className="text-xs font-semibold tabular-nums text-ink-2">{Math.round(c.viral_score)}/100</span>
+                </p>
+                <Link href={`/clips/${c.id}`} className="block truncate text-sm text-ink-2 hover:text-fire">{c.title || c.hook_text}</Link>
+                <p className="text-xs text-muted">
+                  {formatDuration(c.duration)} · {CATEGORY_LABELS[c.category ?? "other"] ?? c.category ?? "—"} · {c.potential_label}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button size="sm" icon={<Play className="size-3.5" />} onClick={() => setPreview(c)}>Preview</Button>
+                {c.download_url ? (
+                  <a href={c.download_url} className="fire-gradient inline-flex h-8 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-white hover:brightness-110">
+                    <Download className="size-3.5" /> Download
+                  </a>
+                ) : (
+                  <Link href={c.status === "awaiting_media" ? `/videos/${c.video_id}` : `/clips/${c.id}`}>
+                    <Badge tone={st?.tone ?? "neutral"}>{c.status === "awaiting_media" ? "Bron nodig" : (st?.label ?? c.status)}</Badge>
+                  </Link>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="border-t border-line px-5 py-3 text-right">
+        <Link href="/clips" className="text-xs text-muted hover:text-ink">Alle clips bekijken →</Link>
+      </div>
+      <Modal open={!!preview} onClose={() => setPreview(null)} title={preview ? `${preview.creator_name ?? "Eigen upload"} · ${Math.round(preview.viral_score)}/100` : ""}>
+        {preview && (
+          <div className="space-y-4">
+            <ClipPlayer clip={preview} />
+            <p className="text-sm font-semibold">{preview.title || preview.hook_text}</p>
+            {preview.explanation && <p className="text-xs leading-relaxed text-muted">{preview.explanation}</p>}
+            <div className="flex justify-end gap-2">
+              <LinkButton href={`/clips/${preview.id}`}>Details & bewerken</LinkButton>
+              {preview.download_url && (
+                <a href={preview.download_url} className="fire-gradient inline-flex h-10 items-center gap-2 rounded-lg px-4 text-sm font-semibold text-white hover:brightness-110">
+                  <Download className="size-4" /> Download
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+    </Card>
+  );
+}
+
 export default function DashboardPage() {
   const { data, isLoading } = useApi<Dashboard>("/api/dashboard", { refreshInterval: 10000 });
 
@@ -73,12 +141,15 @@ export default function DashboardPage() {
         title={
           <span className="flex flex-wrap items-center gap-3">
             <Flame className="size-7 text-fire" />
-            <span>
-              <span className="fire-text">{data.new_potential_viral_clips}</span> new potential viral clips
-            </span>
+            <span>Top Viral Clips</span>
           </span>
         }
-        subtitle="Clips met een Viral Score van 70+ die de afgelopen 24 uur zijn gevonden."
+        subtitle={
+          <>
+            <span className="fire-text font-semibold">{data.new_potential_viral_clips}</span> new potential viral clips in de afgelopen 24 uur
+            (Viral Score 70+). Beste bovenaan.
+          </>
+        }
         actions={
           <>
             <LinkButton href="/clips?sort=score">Alle clips</LinkButton>
@@ -107,6 +178,27 @@ export default function DashboardPage() {
       )}
 
       {data.setup?.some((s) => !s.done) && <SetupChecklist steps={data.setup} />}
+
+      <section>
+        {data.top_clips.length === 0 ? (
+          <Card>
+            <EmptyState
+              icon={<Hourglass className="size-5" />}
+              title="Nog geen clips"
+              text={
+                data.creators === 0
+                  ? "Voeg eerst een creator toe, bijvoorbeeld Enzo Knol, Bankzitters, Hanwe, Gio of StukTV."
+                  : data.videos_awaiting_media > 0
+                    ? `${data.videos_awaiting_media} video('s) wachten op de bronvideo. Lever die aan (upload, Drive/Dropbox/OneDrive-link of .srt) en de clips verschijnen hier vanzelf.`
+                    : "Zodra je creators nieuwe video's plaatsen en de bron beschikbaar is, verschijnen hier de beste momenten."
+              }
+              action={<LinkButton href={data.creators ? "/videos?status=awaiting_media" : "/creators"}>{data.creators ? "Bron aanleveren" : "Creator toevoegen"}</LinkButton>}
+            />
+          </Card>
+        ) : (
+          <TopClipsList clips={data.top_clips.slice(0, 10)} />
+        )}
+      </section>
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="🔥 High potential (24u)" value={data.new_potential_viral_clips} hint={`${data.unrated_high_potential} nog niet beoordeeld`} accent />
@@ -164,37 +256,6 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      <section>
-        <div className="mb-4 flex items-end justify-between">
-          <div>
-            <h2 className="text-lg font-bold">Top clips</h2>
-            <p className="text-xs text-muted">Hoogste Viral Score van de afgelopen 7 dagen</p>
-          </div>
-          <Link href="/clips" className="text-xs text-muted hover:text-ink">Alles bekijken →</Link>
-        </div>
-        {data.top_clips.length === 0 ? (
-          <Card>
-              <EmptyState
-                icon={<Hourglass className="size-5" />}
-                title="Nog geen clips"
-                text={
-                  data.creators === 0
-                    ? "Voeg eerst een creator toe, bijvoorbeeld Enzo Knol, Bankzitters, Hanwe, Gio of StukTV."
-                    : data.videos_awaiting_media > 0
-                      ? `${data.videos_awaiting_media} video('s) wachten op het bronbestand of ondertitels. Lever ze aan op de Videos-pagina (upload, deel-link of .srt).`
-                      : "Zodra je creators nieuwe video's plaatsen en de bron beschikbaar is, verschijnen hier de beste momenten."
-                }
-                action={<LinkButton href={data.creators ? "/videos" : "/creators"}>{data.creators ? "Naar Videos" : "Creator toevoegen"}</LinkButton>}
-              />
-            </Card>
-        ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-            {data.top_clips.map((c) => (
-              <ClipCard key={c.id} clip={c} />
-            ))}
-          </div>
-        )}
-      </section>
 
       <p className="text-center text-[11px] text-muted">
         De Viral Score is een voorspelling op basis van kenmerken (hook, retentie, emotie, deelbaarheid, …) — geen garantie. Gemiddelde clipduur doel: {formatDuration(15)}.

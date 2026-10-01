@@ -40,6 +40,7 @@ from app.ai.signals import (
     feature_vector,
     heuristic_dimension_scores,
     signal_score,
+    topic_breaks,
     window_features,
 )
 from app.ai.transcript import Word, segment_sentences, words_from_rows
@@ -126,9 +127,10 @@ def ensure_transcript(db: Session, video: Video, creator: Creator | None, rs: Ru
         )
     transcriber = get_transcriber(db, rs)
     if transcriber is None:
-        raise AnalysisError(
-            "Geen spraak-naar-tekst beschikbaar: stel OPENAI_API_KEY in, installeer faster-whisper "
-            "(pip install '.[local-whisper]') of upload een SRT/VTT-transcript."
+        raise JobWaiting(
+            "Bronvideo ontvangen. Voor de transcriptie is een OpenAI API key nodig: vul hem in bij Settings → "
+            "API keys, dan start de analyse vanzelf. Of upload ondertitels (.srt).",
+            reason="api_key",
         )
     duration = float(video.media_meta.get("duration") or video.duration_seconds or 0)
     progress(5, f"Transcriberen met {transcriber.name} ({duration / 60:.0f} min audio)")
@@ -209,8 +211,10 @@ def analyze_video(
         title=video.title or "",
         creator=(creator.name if creator else video.channel_title) or "",
         language=(creator.language if creator else None) or video.language or "nl",
+        topic_breaks=topic_breaks(sentences, cuts),
     )
-    mark("signals", audio=audio is not None, scene_cuts=len(cuts), hotspots=len(ctx.hotspots))
+    mark("signals", audio=audio is not None, scene_cuts=len(cuts), hotspots=len(ctx.hotspots),
+         topic_changes=sum(1 for b in ctx.topic_breaks if b >= 0.6))
 
     # 3. candidates ---------------------------------------------------------------------------------
     rules = duration_rules(rs, creator)

@@ -104,3 +104,59 @@ def test_payoff_after_end_is_included():
     ctx.audio = compute_profile((amp * np.sin(2 * np.pi * 200 * t)).astype(np.float32), sr)
     w = optimize_boundaries(ctx, 0, 1, DurationRules(min_seconds=3, max_seconds=20, target_seconds=8), hook_s=0)
     assert w.s1 == 2
+
+
+def _topic_ctx(lines, long_pause_before=(), cut_before=()):
+    """Normal 0.7 s pauses; a longer pause and/or a camera cut right before the sentences starting with the
+    given text."""
+    from app.ai.signals import topic_breaks
+    from tests.conftest import Word
+
+    words, t = [], 0.0
+    for line in lines:
+        if any(line.startswith(p) for p in long_pause_before):
+            t += 1.7
+        for tok in line.split():
+            words.append(Word(t, t + 0.32, tok))
+            t += 0.38
+        t += 0.7
+    sents = segment_sentences(words)
+    cuts = [s.start - 0.2 for s in sents if any(s.text.startswith(p) for p in cut_before)]
+    ctx = VideoContext(words=words, sentences=sents, duration=words[-1].end + 1, scene_cuts=cuts)
+    ctx.topic_breaks = topic_breaks(sents, cuts)
+    return ctx
+
+
+def _idx(ctx, prefix):
+    return next(i for i, s in enumerate(ctx.sentences) if s.text.startswith(prefix))
+
+
+STORY_THEN_ERRANDS = [
+    "Wacht wat?! Er staat een gigantische doos voor de deur!",
+    "We maken hem open en er zit nog een doos in.",
+    "In de laatste doos zit een briefje, je bent geprankt!",
+    "Hahaha het was mijn broer, die gast is echt niet normaal!",
+    "Oké, we gaan nu even boodschappen doen voor vanavond.",
+    "We hebben melk, brood en kaas nodig.",
+    "Het is best rustig in de winkel vandaag.",
+]
+
+
+def test_topic_change_needs_two_signals():
+    ctx = _topic_ctx(STORY_THEN_ERRANDS, long_pause_before={"Oké"}, cut_before={"Oké"})
+    k = _idx(ctx, "Oké")
+    assert ctx.topic_breaks[k - 1] >= 0.6  # pause + cut + "Oké, we gaan nu"
+    assert max(ctx.topic_breaks[: k - 1]) < 0.6  # inside the story
+    only_opener = _topic_ctx(["Ik was echt heel erg boos op hem.", "Daarna gingen we gewoon naar huis."])
+    assert only_opener.topic_breaks[0] < 0.6  # one signal is not enough
+
+
+def test_clip_never_glues_a_punchline_to_the_next_topic():
+    ctx = _topic_ctx(STORY_THEN_ERRANDS, long_pause_before={"Oké"}, cut_before={"Oké"})
+    punchline, errands_end = _idx(ctx, "Hahaha"), len(ctx.sentences) - 1
+    rules = DurationRules(min_seconds=8, max_seconds=18, target_seconds=12)
+    # a candidate that starts on the punchline and runs into the errands
+    w = optimize_boundaries(ctx, punchline, errands_end, rules, hook_s=punchline)
+    assert w.s1 <= punchline, "the clip must stay inside the prank story"
+    assert w.s0 < punchline, "and grow backwards into its setup instead"
+    assert "mixes_topics" not in w.flags

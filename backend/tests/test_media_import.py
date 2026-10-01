@@ -20,6 +20,12 @@ def test_share_links_become_direct_downloads():
     assert normalize_share_link("https://drive.google.com/open?id=1AbCdEfGhIjKlMnOp").endswith("id=1AbCdEfGhIjKlMnOp&export=download&confirm=t")
     assert "dl=1" in normalize_share_link("https://www.dropbox.com/scl/fi/abc/vlog.mp4?rlkey=x&dl=0")
     assert normalize_share_link("https://cdn.example.com/raw/vlog.mp4") == "https://cdn.example.com/raw/vlog.mp4"
+    # OneDrive personal: documented shares endpoint (u! + unpadded base64url of the sharing link)
+    assert normalize_share_link("https://1drv.ms/v/s!AkTest123") == (
+        "https://api.onedrive.com/v1.0/shares/u!aHR0cHM6Ly8xZHJ2Lm1zL3YvcyFBa1Rlc3QxMjM/root/content"
+    )
+    # OneDrive for work/school (SharePoint)
+    assert normalize_share_link("https://contoso-my.sharepoint.com/:v:/g/personal/x/EAbc?e=1").endswith("?e=1&download=1")
 
 
 @pytest.mark.parametrize("url", ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "https://youtu.be/dQw4w9WgXcQ",

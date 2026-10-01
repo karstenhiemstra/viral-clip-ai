@@ -95,6 +95,36 @@ function FetchModal({ creator, onClose, onDone }: { creator: Creator | null; onC
   );
 }
 
+function FunnelStep({ n, label, href, tone }: { n: number; label: string; href: string; tone: string }) {
+  return (
+    <Link href={href} className={`flex min-w-[58px] flex-col rounded-lg border px-2 py-1.5 transition hover:border-line-2 ${n ? tone : "border-line text-muted"}`}>
+      <span className="text-base font-bold tabular-nums leading-tight">{n}</span>
+      <span className="text-[10px] leading-tight">{label}</span>
+    </Link>
+  );
+}
+
+function CreatorFunnel({ c }: { c: Creator }) {
+  const base = `/videos?creator_id=${c.id}`;
+  return (
+    <div className="flex items-center gap-1">
+      <FunnelStep n={c.new_videos ?? 0} label="nieuwe video's" href={`${base}&status=new`} tone="border-warn/40 text-warn" />
+      <span className="text-muted">→</span>
+      <FunnelStep n={c.analyzing_videos ?? 0} label="analyseren" href={`${base}&status=in_progress`} tone="border-info/40 text-info" />
+      <span className="text-muted">→</span>
+      <FunnelStep n={c.analyzed_videos ?? 0} label="geanalyseerd" href={`${base}&status=analyzed`} tone="border-ok/40 text-ok" />
+      <span className="text-muted">→</span>
+      <Link href={`/clips?creator_id=${c.id}`} className={`flex min-w-[58px] items-center gap-2 rounded-lg border px-2 py-1.5 transition hover:border-line-2 ${c.clip_count ? "border-fire/40" : "border-line text-muted"}`}>
+        <span className="flex flex-col">
+          <span className="text-base font-bold tabular-nums leading-tight">{c.clip_count ?? 0}</span>
+          <span className="text-[10px] leading-tight">clips gevonden</span>
+        </span>
+        {c.best_score != null && <ScoreBadge score={c.best_score} />}
+      </Link>
+    </div>
+  );
+}
+
 function Avatar({ src, name, size = 36 }: { src: string | null; name: string; size?: number }) {
   return src ? (
     // eslint-disable-next-line @next/next/no-img-element
@@ -215,7 +245,7 @@ function AddCreatorModal({ open, onClose, onAdded }: { open: boolean; onClose: (
   );
 }
 
-function CreatorSettingsModal({ creator, onClose, onSaved }: { creator: Creator | null; onClose: () => void; onSaved: () => void }) {
+function CreatorSettingsModal({ creator, onClose, onSaved, onRemove }: { creator: Creator | null; onClose: () => void; onSaved: () => void; onRemove: (c: Creator) => void }) {
   const toast = useToast();
   const [form, setForm] = useState<Partial<Creator>>({});
   const [saving, setSaving] = useState(false);
@@ -273,9 +303,12 @@ function CreatorSettingsModal({ creator, onClose, onSaved }: { creator: Creator 
         <Toggle checked={c.scan_enabled} onChange={(v) => setForm({ ...form, scan_enabled: v })} label="Automatisch scannen" hint="Nieuwe uploads worden periodiek gecontroleerd (interval in Settings)." />
         <Toggle checked={c.auto_analyze} onChange={(v) => setForm({ ...form, auto_analyze: v })} label="Nieuwe video's automatisch analyseren" />
       </div>
-      <div className="mt-5 flex justify-end gap-2">
-        <Button onClick={onClose}>Annuleren</Button>
-        <Button variant="fire" loading={saving} onClick={save}>Opslaan</Button>
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+        <Button variant="ghost" icon={<Trash2 className="size-3.5" />} onClick={() => creator && onRemove(creator)}>Creator verwijderen</Button>
+        <div className="flex gap-2">
+          <Button onClick={onClose}>Annuleren</Button>
+          <Button variant="fire" loading={saving} onClick={save}>Opslaan</Button>
+        </div>
       </div>
     </Modal>
   );
@@ -327,15 +360,12 @@ export default function CreatorsPage() {
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-sm">
+            <table className="w-full min-w-[760px] text-sm">
               <thead>
                 <tr className="border-b border-line text-left text-[11px] tracking-wide text-muted uppercase">
                   <th className="px-5 py-3 font-medium">Creator</th>
                   <th className="px-3 py-3 font-medium">Laatste video</th>
-                  <th className="px-3 py-3 text-right font-medium">Nieuwe video&apos;s</th>
-                  <th className="px-3 py-3 font-medium">Laatste scan</th>
-                  <th className="px-3 py-3 font-medium">Prioriteit</th>
-                  <th className="px-3 py-3 text-right font-medium">Clips</th>
+                  <th className="px-3 py-3 font-medium">Nieuwe video&apos;s → analyseren → geanalyseerd → clips</th>
                   <th className="px-5 py-3" />
                 </tr>
               </thead>
@@ -349,42 +379,31 @@ export default function CreatorsPage() {
                           <Avatar src={c.thumbnail_url} name={c.name} />
                           <div className="min-w-0">
                             <Link href={`/videos?creator_id=${c.id}`} className="block truncate font-semibold hover:text-fire">{c.name}</Link>
-                            <a href={c.channel_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-muted hover:text-ink">
+                            <a href={c.channel_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs whitespace-nowrap text-muted hover:text-ink">
                               {c.handle ?? "YouTube-kanaal"} {c.subscriber_count != null && `· ${compactNumber(c.subscriber_count)} subs`}
                               <ExternalLink className="size-3" />
                             </a>
+                            <div className="mt-1 flex items-center gap-2 text-[11px] text-muted" title={c.last_scan_error ?? st.label}>
+                              <StatusDot tone={st.tone} />
+                              <span className="whitespace-nowrap">{st.tone === "success" ? `gescand ${relativeTime(c.last_scanned_at)}` : st.label}</span>
+                              {c.priority !== "normal" && <Badge tone={PRIORITY[c.priority].tone}>{PRIORITY[c.priority].label}</Badge>}
+                            </div>
                           </div>
                         </div>
                       </td>
-                      <td className="max-w-[220px] px-3 py-3">
+                      <td className="max-w-[170px] px-3 py-3">
                         <p className="truncate text-ink-2">{c.last_video_title ?? "—"}</p>
                         <p className="text-xs text-muted">{c.last_video_published_at ? relativeTime(c.last_video_published_at) : ""}</p>
                       </td>
-                      <td className="px-3 py-3 text-right tabular-nums">
-                        <span className="font-semibold">{c.last_scan_new_videos}</span>
-                        {!!c.pending_videos && <span className="block text-xs text-muted">{c.pending_videos} in behandeling</span>}
-                      </td>
                       <td className="px-3 py-3">
-                        <div className="flex items-center gap-2" title={c.last_scan_error ?? st.label}>
-                          <StatusDot tone={st.tone} />
-                          <span className="text-ink-2">{relativeTime(c.last_scanned_at)}</span>
-                        </div>
-                        {st.tone !== "success" && <p className="mt-0.5 text-xs text-muted">{st.label}</p>}
+                        <CreatorFunnel c={c} />
                       </td>
-                      <td className="px-3 py-3"><Badge tone={PRIORITY[c.priority].tone}>{PRIORITY[c.priority].label}</Badge></td>
-                      <td className="px-3 py-3 text-right">
-                        <div className="flex items-center justify-end gap-2">
-                          <span className="tabular-nums text-ink-2">{c.clip_count ?? 0}</span>
-                          {c.best_score != null && <ScoreBadge score={c.best_score} />}
-                        </div>
-                      </td>
-                      <td className="px-5 py-3">
-                        <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="secondary" title="Video's ophalen" icon={<Download className="size-3.5" />} onClick={() => setFetching(c)}>
-                            Video&apos;s ophalen
+                      <td className="py-3 pr-4 pl-2">
+                        <div className="flex justify-end gap-0.5">
+                          <Button size="sm" variant="secondary" className="whitespace-nowrap" title="Video's ophalen" icon={<Download className="size-3.5" />} onClick={() => setFetching(c)}>
+                            Ophalen
                           </Button>
                           <Button size="sm" variant="ghost" title="Instellingen" onClick={() => setEditing(c)}><SlidersHorizontal className="size-3.5" /></Button>
-                          <Button size="sm" variant="ghost" title="Verwijderen" onClick={() => remove(c)}><Trash2 className="size-3.5" /></Button>
                         </div>
                       </td>
                     </tr>
@@ -396,7 +415,7 @@ export default function CreatorsPage() {
         )}
       </Card>
       <AddCreatorModal open={adding} onClose={() => setAdding(false)} onAdded={() => mutate()} />
-      <CreatorSettingsModal creator={editing} onClose={() => setEditing(null)} onSaved={() => mutate()} />
+      <CreatorSettingsModal creator={editing} onClose={() => setEditing(null)} onSaved={() => mutate()} onRemove={(c) => { setEditing(null); remove(c); }} />
       <FetchModal key={fetching?.id ?? 0} creator={fetching} onClose={() => setFetching(null)} onDone={() => mutate()} />
     </div>
   );

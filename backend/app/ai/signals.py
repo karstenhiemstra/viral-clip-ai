@@ -65,6 +65,14 @@ class VideoContext:
     title: str = ""
     creator: str = ""
     language: str = "nl"
+    # topic_breaks[i] = 0..1 strength of a topic change between sentence i and i+1 (see topic_breaks()).
+    topic_breaks: list[float] = field(default_factory=list)
+
+    def break_between(self, a: int, b: int) -> float:
+        """Strongest topic change strictly inside sentences a..b (0 when the span is one topic)."""
+        if b <= a or not self.topic_breaks:
+            return 0.0
+        return max(self.topic_breaks[max(0, a) : min(b, len(self.topic_breaks))] or [0.0])
 
     @property
     def speech_rate_median(self) -> float:
@@ -72,6 +80,73 @@ class VideoContext:
             return 2.5
         spoken = sum(max(0.0, s.end - s.start) for s in self.sentences) or self.duration
         return len(self.words) / spoken
+
+
+# Sentence openers that usually start a NEW segment of a vlog ("Oké, we gaan nu...", "Daarna...").
+TRANSITION_OPENERS = (
+    "oké", "oke", "ok", "okay", "oké dus", "goed", "zo", "daarna", "vervolgens", "later", "inmiddels", "thuis",
+    "intussen", "ondertussen", "nu gaan we", "we gaan nu", "dan gaan we", "en dan gaan we", "volgende",
+    "anyway", "alright", "after that", "later that", "next", "so now", "now we",
+)
+# Openers that announce a NEW story or reveal ("Ik moet jullie iets vertellen...", "Raad eens...").
+STORY_OPENERS = (
+    "ik moet jullie", "moet ik jullie", "ik heb nieuws", "groot nieuws", "raad eens", "wist je dat", "wisten jullie",
+    "weet je nog", "gisteren", "vorige week", "vorig jaar", "laatst", "het verhaal", "ik ga jullie",
+    "guess what", "let me tell you", "i have to tell you", "i need to tell you", "yesterday", "last week",
+)
+_TRANSITION_TOKENS = sorted(([normalize(t) for t in p.split()] for p in TRANSITION_OPENERS), key=len, reverse=True)
+_STORY_TOKENS = sorted(([normalize(t) for t in p.split()] for p in STORY_OPENERS), key=len, reverse=True)
+
+
+def _starts_with(text: str, phrases: list[list[str]]) -> bool:
+    toks = [normalize(t) for t in text.split()[:5]]
+    return any(toks[: len(p)] == p for p in phrases)
+
+
+def starts_with_transition(text: str) -> bool:
+    return _starts_with(text, _TRANSITION_TOKENS)
+
+
+def starts_new_story(text: str) -> bool:
+    return _starts_with(text, _STORY_TOKENS)
+
+
+def topic_breaks(sentences: list[Sentence], scene_cuts: list[float] | None = None) -> list[float]:
+    """How strongly the topic changes between consecutive sentences (0..1), from free signals:
+    an unusually long pause, a camera cut in that pause, a transition opener ("Oké, we gaan nu...",
+    "Daarna...", "Thuis..."), and intro/outro/sponsor material on one side only.
+
+    Used to keep clips inside one story: a clip that starts on a punchline and then drifts into
+    "we hebben melk, brood en kaas nodig" is exactly what a viewer scrolls away from."""
+    n = len(sentences)
+    if n < 2:
+        return []
+    gaps = [max(0.0, sentences[i + 1].start - sentences[i].end) for i in range(n - 1)]
+    typical = max(0.25, sorted(gaps)[len(gaps) // 2])
+    cuts = sorted(scene_cuts or [])
+    out: list[float] = []
+    for i in range(n - 1):
+        cur, nxt = sentences[i], sentences[i + 1]
+        strength = 0.0
+        ratio = gaps[i] / typical  # pauses are judged relative to this speaker's normal rhythm
+        # No single signal makes a topic change (vloggers pause and jump-cut inside stories too);
+        # it takes two of: a long pause, a camera cut, a transition/story opener, promo on one side.
+        if ratio >= 3.0 and gaps[i] >= 1.0:
+            strength += 0.4
+        elif ratio >= 2.2 and gaps[i] >= 0.75:
+            strength += 0.3
+        if any(cur.end - 0.35 <= c <= nxt.start + 0.35 for c in cuts):
+            strength += 0.3
+        if starts_with_transition(nxt.text):
+            strength += 0.4
+        elif starts_new_story(nxt.text):
+            strength += 0.35
+        promo_cur = contains_outro(cur.text) or is_intro_text(cur.text)
+        promo_nxt = contains_outro(nxt.text) or is_intro_text(nxt.text)
+        if promo_cur != promo_nxt:
+            strength += 0.4
+        out.append(round(min(1.0, strength), 3))
+    return out
 
 
 def _tokens(words: list[Word]) -> list[str]:
@@ -183,6 +258,10 @@ def window_features(ctx: VideoContext, start: float, end: float, clip_words: lis
     # The loudest reaction right AFTER the cut means the payoff was cut off.
     after = peak_after(ctx.audio, end, 4.0)
     feats["audio_after_peak_z"] = round(after, 3)
+    feats["topic_break"] = max(
+        [b for i, b in enumerate(ctx.topic_breaks) if ctx.sentences[i].end > start + 0.3 and ctx.sentences[i + 1].start < end - 0.3]
+        or [0.0]
+    )
     feats["payoff_after_end"] = 1.0 if audio.get("available") and after > max(1.8, audio.get("peak_z", 0) + 0.4) else 0.0
     return feats
 
@@ -213,7 +292,10 @@ def heuristic_dimension_scores(f: dict[str, float]) -> dict[str, float]:
     comment = 30 + 16 * f.get("lex_controversy", 0) + 6 * min(2, f.get("questions", 0)) + 25 * crowd
     retention = 48 + 12 * min(1.3, rel_rate) - 70 * silence + 10 * (1 if f.get("audio_peak_pos", 0) > 0.45 else 0)
     retention -= 25 * f.get("outro", 0) + 15 * f.get("intro", 0)
+    topic = f.get("topic_break", 0.0) if f.get("topic_break", 0.0) >= 0.5 else 0.0
+    retention -= 22 * topic
     context = 78 - 22 * f.get("hook_context_opener", 0) - 8 * f.get("hook_starts_filler", 0) + 6 * f.get("ends_complete", 0)
+    context -= 25 * topic
     payoff = 38 + 16 * (1 if f.get("audio_peak_pos", 0) > 0.5 else 0) + 8 * max(0, f.get("audio_end_z", 0))
     payoff += 12 * f.get("humor_end", 0) + 10 * f.get("ends_complete", 0) - 25 * f.get("payoff_after_end", 0)
     share = 0.35 * humor_s + 0.3 * surprise + 0.2 * emotion + 0.15 * curiosity + 22 * crowd
@@ -251,6 +333,8 @@ def signal_score(f: dict[str, float]) -> float:
         s += 7 * max(0.0, min(3.0, f.get("audio_peak_z", 0))) + 4 * max(-1.0, min(2.0, f.get("audio_hook_z", 0)))
         s -= 30 * f.get("audio_silence_ratio", 0)
     s -= 25 * f.get("outro", 0) + 20 * f.get("intro", 0) + 10 * f.get("payoff_after_end", 0)
+    if f.get("topic_break", 0.0) >= 0.5:  # two topics glued together
+        s -= 22 * f["topic_break"]
     return round(_c(s), 1)
 
 
@@ -261,7 +345,7 @@ def feature_vector(f: dict[str, float], scores: dict[str, float] | None = None) 
         "ends_complete", "humor_end", "lex_question", "lex_intensity", "lex_humor", "lex_surprise",
         "lex_controversy", "lex_story", "lex_stakes", "lex_teaser", "audio_peak_z", "audio_hook_z", "audio_silence_ratio",
         "audio_peak_pos", "hook_starts_filler", "hook_context_opener", "hook_time_to_strong", "hook_first_strength",
-        "hook_first_question", "intro", "payoff_after_end",
+        "hook_first_question", "intro", "payoff_after_end", "topic_break",
     )
     vec = {k: float(f.get(k, 0.0)) for k in keys}
     for k, v in (scores or {}).items():

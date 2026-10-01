@@ -1,13 +1,14 @@
 "use client";
 
-import { ArrowLeft, Check, ExternalLink, Inbox, MessageCircle, Trash2, Wand2 } from "lucide-react";
+import { ArrowLeft, Check, ExternalLink, MessageCircle, Trash2, Wand2 } from "lucide-react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 
 import { ClipCard, ScoreBadge } from "@/components/clips";
 import { errorText, useToast } from "@/components/toast";
-import { Badge, Button, Card, CardHeader, EmptyState, PageHeader, ProgressBar, Spinner } from "@/components/ui";
-import { ImportLinkButton, UploadMediaButton, UploadTranscriptButton } from "@/components/uploads";
+import { Badge, Button, Card, CardHeader, EmptyState, LinkButton, PageHeader, ProgressBar, Spinner } from "@/components/ui";
+import { SourcePanel } from "@/components/source";
+import { UploadMediaButton, UploadTranscriptButton } from "@/components/uploads";
 import { api, useApi } from "@/lib/api";
 import { CATEGORY_LABELS, compactNumber, formatDate, formatDuration, formatNumber, formatTimestamp, money, VIDEO_STATUS } from "@/lib/format";
 import type { Clip, Video } from "@/lib/types";
@@ -68,50 +69,55 @@ export default function VideoDetailPage() {
       {v.job_status && (
         <Card className="p-5">
           <div className="flex items-center justify-between text-sm">
-            <span>{v.job_status === "waiting" ? "Wacht op bronmateriaal" : "Analyse bezig"}</span>
+            <span>{v.job_status === "waiting" ? (v.status === "awaiting_key" ? "Wacht op je OpenAI API key" : "Wacht op de bronvideo") : "Analyse bezig"}</span>
             <span className="tabular-nums text-muted">{Math.round(v.job_progress ?? 0)}%</span>
           </div>
           <ProgressBar value={v.job_progress ?? 0} className="mt-2" />
           <p className="mt-2 text-xs text-muted">{v.job_message}</p>
+          {v.status === "awaiting_key" && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <LinkButton href="/settings" variant="fire">Naar Settings → API keys</LinkButton>
+              <UploadTranscriptButton video={v} onDone={refresh} />
+            </div>
+          )}
         </Card>
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader title="Bronmateriaal" subtitle="ViralClip downloadt bewust niets van YouTube (Terms of Service). Lever de bron aan via een toegestane route." />
-          <div className="grid gap-4 p-5 sm:grid-cols-2">
-            <div className="space-y-2 rounded-xl border border-line bg-panel-2 p-4">
-              <p className="flex items-center gap-2 text-sm font-semibold">
-                {v.has_media ? <Check className="size-4 text-ok" /> : <span className="size-4 rounded-full border border-line-2" />} Videobestand
-              </p>
-              <p className="text-xs text-muted">
-                {v.has_media
-                  ? `${String(v.media_meta.width ?? "?")}×${String(v.media_meta.height ?? "?")} · ${formatDuration(Number(v.media_meta.duration ?? 0))} · via ${v.media_origin}`
-                  : "Nodig voor audio-analyse en het renderen van verticale clips."}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <UploadMediaButton video={v} onDone={refresh} />
-                <ImportLinkButton video={v} onDone={refresh} />
+          <CardHeader
+            title={v.has_media ? "Bronmateriaal" : "Bronvideo aanleveren"}
+            subtitle={v.has_media ? "Het videobestand en transcript waarmee de clips gemaakt worden." : "ViralClip downloadt bewust niets van YouTube (voorwaarden). Kies hieronder één manier."}
+          />
+          <div className="p-5">
+            {v.has_media ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2 rounded-xl border border-line bg-panel-2 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold"><Check className="size-4 text-ok" /> Videobestand</p>
+                  <p className="text-xs text-muted">
+                    {`${String(v.media_meta.width ?? "?")}×${String(v.media_meta.height ?? "?")} · ${formatDuration(Number(v.media_meta.duration ?? 0))} · via ${v.media_origin}`}
+                  </p>
+                  <UploadMediaButton video={v} onDone={refresh} />
+                </div>
+                <div className="space-y-2 rounded-xl border border-line bg-panel-2 p-4">
+                  <p className="flex items-center gap-2 text-sm font-semibold">
+                    {v.has_transcript ? <Check className="size-4 text-ok" /> : <span className="size-4 rounded-full border border-line-2" />} Transcript
+                  </p>
+                  <p className="text-xs text-muted">
+                    {v.has_transcript ? `${formatNumber(v.transcript_words ?? 0)} woorden · bron: ${v.transcript_source}` : "Wordt automatisch gemaakt tijdens de analyse."}
+                  </p>
+                  <UploadTranscriptButton video={v} onDone={refresh} />
+                </div>
               </div>
-            </div>
-            <div className="space-y-2 rounded-xl border border-line bg-panel-2 p-4">
-              <p className="flex items-center gap-2 text-sm font-semibold">
-                {v.has_transcript ? <Check className="size-4 text-ok" /> : <span className="size-4 rounded-full border border-line-2" />} Transcript
-              </p>
-              <p className="text-xs text-muted">
-                {v.has_transcript
-                  ? `${formatNumber(v.transcript_words ?? 0)} woorden · bron: ${v.transcript_source}`
-                  : "Wordt automatisch gemaakt met Whisper zodra het videobestand er is. Of upload ondertitels (.srt/.vtt): dan kan de analyse al starten, zonder transcriptiekosten."}
-              </p>
-              <UploadTranscriptButton video={v} onDone={refresh} />
-            </div>
-            {v.youtube_video_id && !v.has_media && (
-              <p className="flex items-start gap-2 text-xs text-muted sm:col-span-2">
-                <Inbox className="mt-0.5 size-3.5 shrink-0" />
-                <span>
-                  Automatisch koppelen: zet het bestand in de inbox-map met het video-ID in de naam, bijv. <code className="rounded bg-panel-3 px-1 text-ink-2">titel [{v.youtube_video_id}].mp4</code>
-                </span>
-              </p>
+            ) : (
+              <div className="space-y-3">
+                {v.has_transcript && (
+                  <p className="flex items-center gap-2 rounded-lg border border-ok/30 bg-ok/5 px-3 py-2 text-xs text-ok">
+                    <Check className="size-3.5" /> Ondertitels ontvangen ({formatNumber(v.transcript_words ?? 0)} woorden){clips?.items.length ? ` — ${clips.items.length} clips gevonden, ze worden gerenderd zodra de video er is.` : "."}
+                  </p>
+                )}
+                <SourcePanel video={v} onDone={refresh} />
+              </div>
             )}
           </div>
         </Card>

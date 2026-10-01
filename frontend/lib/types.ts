@@ -25,7 +25,10 @@ export interface Creator {
   last_video_published_at: string | null;
   last_video_title: string | null;
   pending_videos?: number;
+  new_videos?: number;
+  analyzing_videos?: number;
   analyzed_videos?: number;
+  skipped_videos?: number;
   clip_count?: number;
   best_score?: number | null;
   scan_job_status?: string | null;
@@ -326,7 +329,7 @@ export interface SettingsPayload {
       output_language: string;
     };
   };
-  secrets: Record<string, { configured: boolean; source: string | null; masked: string }>;
+  secrets: Record<string, { configured: boolean; source: string | null; masked: string; status: "connected" | "error" | "untested" | "missing"; message: string | null; checked_at: string | null }>;
   system: {
     ffmpeg: boolean;
     face_detector: string;

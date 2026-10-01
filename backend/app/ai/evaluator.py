@@ -211,6 +211,8 @@ def heuristic_flags(f: dict[str, float]) -> list[str]:
         flags.append("weak_payoff")
     if f.get("audio_available") and f.get("audio_silence_ratio", 0) > 0.3:
         flags.append("low_energy")
+    if f.get("topic_break", 0) >= 0.6:
+        flags.append("mixes_topics")
     return flags
 
 

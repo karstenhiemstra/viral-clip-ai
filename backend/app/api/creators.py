@@ -24,7 +24,8 @@ from app.services.youtube import (
 
 router = APIRouter(prefix="/api/creators", tags=["creators"])
 
-PENDING = (VideoStatus.DISCOVERED, VideoStatus.QUEUED, VideoStatus.AWAITING_MEDIA, VideoStatus.ANALYZING)
+PENDING = (VideoStatus.DISCOVERED, VideoStatus.QUEUED, VideoStatus.AWAITING_MEDIA, VideoStatus.AWAITING_KEY, VideoStatus.ANALYZING)
+NEW = (VideoStatus.DISCOVERED, VideoStatus.AWAITING_MEDIA, VideoStatus.AWAITING_KEY)  # found, waiting for you
 
 
 Period = Literal["today", "24h", "7d", "30d", "all"]
@@ -61,16 +62,11 @@ class CreatorUpdate(BaseModel):
 
 
 def _stats(db: Session) -> dict[int, dict]:
-    pending = dict(
-        db.execute(
-            select(Video.creator_id, func.count()).where(Video.status.in_(PENDING)).group_by(Video.creator_id)
-        ).all()
-    )
-    analyzed = dict(
-        db.execute(
-            select(Video.creator_id, func.count()).where(Video.status == VideoStatus.ANALYZED).group_by(Video.creator_id)
-        ).all()
-    )
+    by_status: dict[int, dict[str, int]] = {}
+    for cid, status, n in db.execute(
+        select(Video.creator_id, Video.status, func.count()).group_by(Video.creator_id, Video.status)
+    ).all():
+        by_status.setdefault(cid, {})[status] = n
     clips = {
         r[0]: (r[1], r[2])
         for r in db.execute(
@@ -87,18 +83,24 @@ def _stats(db: Session) -> dict[int, dict]:
             )
         ).all()
     }
-    ids = set(pending) | set(analyzed) | set(clips) | set(running)
-    return {
-        i: {
-            "pending_videos": pending.get(i, 0),
-            "analyzed_videos": analyzed.get(i, 0),
+    ids = set(by_status) | set(clips) | set(running)
+    out: dict[int, dict] = {}
+    for i in ids:
+        if i is None:
+            continue
+        st = by_status.get(i, {})
+        out[i] = {
+            "pending_videos": sum(st.get(k, 0) for k in PENDING),
+            # the four steps of the creator workflow, as shown on the Creators page
+            "new_videos": sum(st.get(k, 0) for k in NEW),
+            "analyzing_videos": st.get(VideoStatus.QUEUED, 0) + st.get(VideoStatus.ANALYZING, 0),
+            "analyzed_videos": st.get(VideoStatus.ANALYZED, 0),
+            "skipped_videos": st.get(VideoStatus.SKIPPED, 0),
             "clip_count": clips.get(i, (0, None))[0],
             "best_score": clips.get(i, (0, None))[1],
             "scan_job_status": running.get(i),
         }
-        for i in ids
-        if i is not None
-    }
+    return out
 
 
 def _yt(db: Session) -> YouTubeClient:
@@ -109,7 +111,8 @@ def _yt(db: Session) -> YouTubeClient:
 def list_creators(db: Session = Depends(get_db)):
     stats = _stats(db)
     creators = db.scalars(select(Creator).order_by(Creator.priority.desc(), Creator.name)).all()
-    empty = {"pending_videos": 0, "analyzed_videos": 0, "clip_count": 0, "best_score": None, "scan_job_status": None}
+    empty = {"pending_videos": 0, "new_videos": 0, "analyzing_videos": 0, "analyzed_videos": 0,
+             "skipped_videos": 0, "clip_count": 0, "best_score": None, "scan_job_status": None}
     order = {"high": 0, "normal": 1, "low": 2}
     out = [creator_out(c, stats.get(c.id, empty)) for c in creators]
     out.sort(key=lambda c: (order.get(c["priority"], 1), c["name"].lower()))
