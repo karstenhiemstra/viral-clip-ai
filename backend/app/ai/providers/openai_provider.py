@@ -14,10 +14,12 @@ from app.ai.llm import (
     LLMFatalError,
     LLMResult,
     LLMUsage,
+    connection_error_message,
     estimate_cost,
     parse_json_loose,
     resolve_models,
 )
+from app.config import openai_base_url
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +52,7 @@ class OpenAIProvider:
         models: dict[str, str] | None = None,
         efforts: dict[str, str | None] | None = None,
     ):
-        self.client = openai.OpenAI(api_key=api_key, base_url=base_url, max_retries=3, timeout=300.0)
+        self.client = openai.OpenAI(api_key=api_key, base_url=base_url or openai_base_url(), max_retries=3, timeout=300.0)
         if models is None:
             models, preset_efforts = resolve_models("openai", "balanced", fast, smart, vision)
             efforts = efforts or preset_efforts
@@ -149,7 +151,9 @@ class OpenAIProvider:
         except openai.APIStatusError as e:
             raise LLMError(f"OpenAI API fout {e.status_code}: {e}") from e
         except openai.APIConnectionError as e:
-            raise LLMFatalError(f"OpenAI API niet bereikbaar (internet/firewall?): {e}") from e
+            message = connection_error_message("OpenAI", e, self.client.base_url)
+            log.warning("%s", message, exc_info=True)
+            raise LLMFatalError(message) from e
 
         choice = resp.choices[0]
         text = choice.message.content or ""

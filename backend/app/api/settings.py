@@ -11,7 +11,7 @@ from app.ai.costs import estimate_video_cost
 from app.ai.llm import LLMError, get_llm, resolve_models
 from app.ai.scoring import DIMENSIONS, LABELS_NL, STAGES
 from app.ai.transcription import TranscriptionError, get_transcriber
-from app.config import get_settings
+from app.config import get_settings, openai_base_url
 from app.db import get_db, get_engine
 from app.services import queue
 from app.services.settings_store import (
@@ -181,7 +181,7 @@ def _check_llm(db: Session, name: str, key: str) -> tuple[bool, str]:
             from app.ai.providers.openai_provider import OpenAIProvider
 
             models, efforts = resolve_models("openai", rs.ai.quality, rs.ai.model_fast, rs.ai.model_smart)
-            llm = OpenAIProvider(api_key=key, base_url=get_settings().openai_base_url or None, models=models, efforts=efforts)
+            llm = OpenAIProvider(api_key=key, base_url=openai_base_url(), models=models, efforts=efforts)
             label = "OpenAI"
         else:
             from app.ai.providers.anthropic_provider import AnthropicProvider
