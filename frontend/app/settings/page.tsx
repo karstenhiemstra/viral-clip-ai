@@ -6,7 +6,7 @@ import { type ReactNode, useState } from "react";
 import { errorText, useToast } from "@/components/toast";
 import { Badge, Button, Card, CardHeader, cx, Field, Input, PageHeader, Select, Spinner, Toggle } from "@/components/ui";
 import { api, useApi } from "@/lib/api";
-import { DIMENSION_LABELS, LAYOUT_LABELS, PRESET_LABELS, STAGE_LABELS } from "@/lib/format";
+import { DIMENSION_LABELS, LAYOUT_LABELS, PRESET_LABELS, presetValue, STAGE_LABELS } from "@/lib/format";
 import type { SettingsPayload } from "@/lib/types";
 
 type Settings = SettingsPayload["settings"];
@@ -158,10 +158,13 @@ function Slider({ label, value, min, max, step, onChange, hint, format }: { labe
 }
 
 function PresetPreview({ preset, active, onClick }: { preset: string; active: boolean; onClick: () => void }) {
+  const outline = "[text-shadow:0_1px_0_#000,0_-1px_0_#000,1px_0_0_#000,-1px_0_0_#000,1px_2px_1px_rgba(0,0,0,0.5)]";
   const text = {
-    dynamic: <span className="text-[13px] font-black tracking-tight text-white [text-shadow:0_2px_0_#000,0_-1px_0_#000,1px_0_0_#000,-1px_0_0_#000]">DIT IS <span className="text-[#3CFF6B]">ECHT</span></span>,
-    bold_white: <span className="text-[13px] font-extrabold text-white [text-shadow:0_2px_0_#000,0_-2px_0_#000,2px_0_0_#000,-2px_0_0_#000]">Dit is echt</span>,
-    minimal: <span className="rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-semibold text-white">Dit is echt niet normaal</span>,
+    capcut: (
+      <span className={cx("text-[11px] font-extrabold tracking-tight text-white", outline)}>
+        IK HEB <span className="rounded-[2px] bg-[#28A7F0] px-[3px] py-px">ALLES</span>
+      </span>
+    ),
     none: <span className="text-[10px] text-white/60">geen captions</span>,
   }[preset];
   return (
@@ -346,7 +349,7 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
         </div>
         <div className="grid max-w-3xl grid-cols-2 gap-3 px-5 sm:grid-cols-4">
           {data.meta.caption_presets.map((p) => (
-            <PresetPreview key={p} preset={p} active={s.clips.caption_preset === p} onClick={() => update("clips", { caption_preset: p })} />
+            <PresetPreview key={p} preset={p} active={presetValue(s.clips.caption_preset) === p} onClick={() => update("clips", { caption_preset: p })} />
           ))}
         </div>
         <div className="grid gap-4 p-5 sm:grid-cols-2">

@@ -93,7 +93,7 @@ def render_clip(
     out_video: Path,
     out_thumb: Path,
     *,
-    caption_preset: str = "dynamic",
+    caption_preset: str = "capcut",
     layout: str = "auto",
     emphasis: list[str] | None = None,
     title: str | None = None,
@@ -163,7 +163,7 @@ def render_clip(
             v_out = "[vout]"
         elif title:
             ass_path = tmpdir / "title.ass"
-            ass_path.write_text(build_ass([], "bold_white", y=0, title=title), encoding="utf-8")
+            ass_path.write_text(build_ass([], "capcut", y=0, title=title), encoding="utf-8")
             graph.append(f"[vl]ass=filename={ffmpeg.escape_filter_path(ass_path)}[vout]")
             v_out = "[vout]"
         graph.append("[ac]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")

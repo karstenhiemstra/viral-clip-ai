@@ -124,7 +124,7 @@ Wat de app **wel** volledig automatisch doet: nieuwe video's vinden, filteren en
                                            haalt dode stiltes weg, 12–18 s (flexibel, bijv. 00:13:41.2 → 00:13:56.4)
 9. Viral Score                          → formule hieronder
 10. Dubbelingen weg + variatie (MMR)    → top 5 per video, beste bovenaan
-11. Render                              → 9:16 met gezicht-volgen, captions (3 stijlen), −14 LUFS → MP4 1080×1920
+11. Render                              → 9:16 met gezicht-volgen, CapCut-captions, −14 LUFS → MP4 1080×1920
 ```
 
 Het dure model ziet dus nooit het hele transcript, alleen de shortlist. Dat maakt het goedkoop.
@@ -331,7 +331,7 @@ Alle variabelen staan met uitleg in [`.env.example`](.env.example). Alles wat je
 
 Bronnen: **upload** (gestreamd, ook bestanden van meerdere GB), **deel-link** (Google Drive / Dropbox / OneDrive / directe link, met SSRF-bescherming), **inbox-map** `data/inbox/` (bestandsnaam met het video-ID, ook `.srt`/`.vtt`), of **transcript eerst** (analyse draait direct; preview via de officiële YouTube-embed; renderen zodra het bestand er is — zonder opnieuw te analyseren).
 
-Rendering (`backend/app/video/`): knippen met stilte-verwijdering → reframing die **de persoon die praat in het midden houdt** (YuNet-gezichtsdetectie, anders Haar; gezichten volgen per shot, ook als iemand even wegkijkt; de spreker = wiens lippen meebewegen met het stemvolume, plus de transcript-timing; een wissel pas na genoeg bewijs, dus een kort "ja" of een knikkende luisteraar verplaatst het beeld niet; vloeiende camerabewegingen naar de nieuwe spreker, een harde cut alleen waar de video zelf knipt; altijd volle hoogte en binnen het beeld; split-screen alleen bij twee ver uit elkaar zittende mensen die heel snel om en om praten; blur-fit zonder gezichten; golfvorm bij alleen audio — details in [docs/ALGORITHM.md](docs/ALGORITHM.md#rendering--wie-praat-er)) → ASS-captions (woord-gesynchroniseerd, nadruk-woorden, 3 stijlen) → loudness −14 LUFS → H.264/AAC 1080×1920 (faststart) + thumbnail. Per clip pas je captions, layout en start/einde (±0,5 s) aan en render je opnieuw.
+Rendering (`backend/app/video/`): knippen met stilte-verwijdering → reframing die **de persoon die praat in het midden houdt** (YuNet-gezichtsdetectie, anders Haar; gezichten volgen per shot, ook als iemand even wegkijkt; de spreker = wiens lippen meebewegen met het stemvolume, plus de transcript-timing; een wissel pas na genoeg bewijs, dus een kort "ja" of een knikkende luisteraar verplaatst het beeld niet; vloeiende camerabewegingen naar de nieuwe spreker, een harde cut alleen waar de video zelf knipt; altijd volle hoogte en binnen het beeld; split-screen alleen bij twee ver uit elkaar zittende mensen die heel snel om en om praten; blur-fit zonder gezichten; golfvorm bij alleen audio — details in [docs/ALGORITHM.md](docs/ALGORITHM.md#rendering--wie-praat-er)) → captions in de gesproken taal (nooit vertaald) in de CapCut-stijl: Poppins ExtraBold in hoofdletters, wit met zwarte rand, het uitgesproken woord op een blauw blok, woord-gesynchroniseerd → loudness −14 LUFS → H.264/AAC 1080×1920 (faststart) + thumbnail. Per clip pas je captions, layout en start/einde (±0,5 s) aan en render je opnieuw.
 
 ### Deployment
 

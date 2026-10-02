@@ -153,11 +153,12 @@ export const STAGE_LABELS: Record<string, { label: string; hint: string }> = {
 };
 
 export const PRESET_LABELS: Record<string, string> = {
-  dynamic: "Dynamic (TikTok-stijl)",
-  bold_white: "Grote witte captions",
-  minimal: "Minimalistisch",
+  capcut: "CapCut (blauwe highlight)",
   none: "Geen captions",
 };
+
+/** Older clips/settings ("dynamic", "bold_white", "minimal") render with the CapCut style now. */
+export const presetValue = (p: string | null | undefined): string => (p === "none" ? "none" : "capcut");
 
 export const LAYOUT_LABELS: Record<string, string> = {
   auto: "Automatisch",

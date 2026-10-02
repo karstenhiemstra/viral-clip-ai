@@ -1,25 +1,32 @@
-"""Caption engine: word-timed ASS subtitles with presets, burned in by ffmpeg/libass.
+"""Caption engine: word-timed ASS subtitles burned in by ffmpeg/libass.
 
-Presets
-* bold_white - big white words with a heavy outline, 2-3 words at a time (classic, very readable).
-* dynamic    - TikTok style: UPPERCASE, the spoken word lights up and pops, emphasis words coloured.
-* minimal    - smaller sentence-case lines on a soft translucent box.
+The look is the CapCut template the user chose (the reference screenshot is the source of truth):
+* Poppins ExtraBold, UPPERCASE, white with a black outline and a soft drop shadow;
+* one line of up to ~4 words, centred horizontally at 76% of the frame height (two lines if a line would
+  get too wide);
+* the word that is being spoken sits on a solid sky-blue box (slightly rounded corners) that jumps from
+  word to word in sync with the speech; the text on it stays white with its black outline;
+* no other colours, no pop/scale animation.
 
-Captions are positioned from the reframing plan so they sit below faces (or above them for close-ups)
-and inside TikTok's safe zone (clear of the bottom UI and the right-hand buttons).
+libass cannot draw a box behind one word of a line, so every word is its own event, placed with the
+font's advance widths (``assets/fonts/Poppins-ExtraBold.metrics.json``), and the box is a vector drawing
+at exactly that place - text and box always line up.
 
-The user can edit the captions of a clip: the automatic grouping is offered as a list of cues
-({start, end, text} in clip time, see ``auto_cues``), edited cues are stored on the clip and turned back
-into word groups for the same styles and animations (``cues_to_groups``).
+Captions are a transcription in the spoken language (see ``app.ai.language``); this module only formats
+and times them. The user can edit the captions of a clip: the automatic grouping is offered as a list of
+cues ({start, end, text} in clip time, see ``auto_cues``), edited cues are stored on the clip and turned
+back into word groups for the same style and highlight (``cues_to_groups``).
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
-from app.ai.transcript import normalize
+from app.config import get_settings
 
 PLAY_W, PLAY_H = 1080, 1920
 
@@ -35,41 +42,44 @@ def ass_color(hex_rgb: str, alpha: int = 0) -> str:
 class CaptionStyle:
     name: str
     font: str
-    size: int
+    metrics: str  # advance-width table of the font in assets/fonts
+    size: int  # ASS font size (libass: = winAscent + winDescent of the font, in script pixels)
     color: str
-    highlight: str
-    emphasis: str
     outline_color: str
     outline: float
     shadow: float
-    bold: bool
+    shadow_color: str
+    shadow_alpha: int
+    box_color: str  # box behind the spoken word
+    box_pad_x: float  # horizontal padding of the box, in em
+    box_height: float  # box height as a multiple of the cap height
+    box_radius: float  # px
     uppercase: bool
     max_words: int
     max_chars: int
-    karaoke: bool  # highlight the currently spoken word
-    pop: bool
-    box: bool = False
-    box_color: str = "#000000"
-    box_alpha: int = 0x60
+    max_line_width: float  # fraction of the frame width
+    word_gap: float  # extra space between words (advance), in em
+    line_gap: float  # px between two lines
+    y: float  # vertical centre of the captions, fraction of the frame height
 
 
-PRESETS: dict[str, CaptionStyle] = {
-    "bold_white": CaptionStyle(
-        name="bold_white", font="Montserrat ExtraBold", size=92, color="#FFFFFF", highlight="#FFFFFF",
-        emphasis="#FFE14D", outline_color="#000000", outline=7, shadow=2, bold=True, uppercase=False,
-        max_words=3, max_chars=18, karaoke=False, pop=False,
-    ),
-    "dynamic": CaptionStyle(
-        name="dynamic", font="Montserrat Black", size=98, color="#FFFFFF", highlight="#3CFF6B",
-        emphasis="#FFE14D", outline_color="#000000", outline=8, shadow=3, bold=True, uppercase=True,
-        max_words=3, max_chars=16, karaoke=True, pop=True,
-    ),
-    "minimal": CaptionStyle(
-        name="minimal", font="Montserrat SemiBold", size=64, color="#FFFFFF", highlight="#FFFFFF",
-        emphasis="#FFFFFF", outline_color="#000000", outline=0, shadow=0, bold=False, uppercase=False,
-        max_words=7, max_chars=34, karaoke=False, pop=False, box=True, box_color="#000000", box_alpha=0x70,
-    ),
-}
+CAPCUT = CaptionStyle(
+    name="capcut", font="Poppins ExtraBold", metrics="Poppins-ExtraBold.metrics.json", size=130,
+    color="#FFFFFF", outline_color="#000000", outline=5, shadow=3, shadow_color="#000000", shadow_alpha=0x70,
+    box_color="#28A7F0", box_pad_x=0.14, box_height=1.46, box_radius=7, uppercase=True,
+    max_words=4, max_chars=22, max_line_width=0.88, word_gap=0.30, line_gap=14, y=0.76,
+)
+PRESETS: dict[str, CaptionStyle] = {"capcut": CAPCUT}
+# Clips and settings from before the CapCut style: they now get the CapCut style too.
+LEGACY_PRESETS = ("dynamic", "bold_white", "minimal")
+
+
+def get_style(preset: str | None) -> CaptionStyle | None:
+    """The caption style for a clip's preset; None = no captions."""
+    if preset == "none":
+        return None
+    return PRESETS.get(preset or "capcut", CAPCUT)
+
 
 _FINAL_PUNCT = re.compile(r"[.!?…]$")
 
@@ -119,25 +129,76 @@ def _group_end(groups: list[list[CaptionWord]], gi: int) -> float:
 
 
 def caption_y(face_bottom_ratio: float | None, face_top_ratio: float | None, layout: str) -> int:
-    """Vertical centre of the caption block in the 1080x1920 frame."""
+    """Vertical centre of the captions in the 1080x1920 frame: where the reference template has them (76%),
+    or between the two halves of a split screen."""
     if layout == "split":
         return int(PLAY_H * 0.5)
-    if layout in ("fit_blur", "audio"):
-        return int(PLAY_H * 0.73)
-    y = 0.68
-    if face_bottom_ratio is not None:
-        if face_bottom_ratio > 0.8 and face_top_ratio is not None and face_top_ratio > 0.3:
-            y = 0.22  # extreme close-up: put captions above the face
-        elif face_bottom_ratio + 0.06 > y:
-            y = min(0.78, face_bottom_ratio + 0.07)
-    return int(PLAY_H * y)
+    return int(PLAY_H * CAPCUT.y)
 
 
 def _display_text(w: CaptionWord, style: CaptionStyle) -> str:
-    t = w.text.strip()
-    if style.name != "minimal":
-        t = t.strip(",;:")
+    t = w.text.strip().strip(".,;:…")  # the template shows words without trailing punctuation (keeps ? and !)
     return t.upper() if style.uppercase else t
+
+
+@lru_cache(maxsize=4)
+def _font_metrics(name: str) -> dict:
+    return json.loads((get_settings().fonts_dir / name).read_text(encoding="utf-8"))
+
+
+@dataclass(frozen=True)
+class _Font:
+    em: float  # px per em at the style's ASS size
+    cap: float  # cap height in px
+    cap_shift: float  # caps centre relative to an \an5 position (px, positive = higher)
+    advances: dict
+    default: float
+    upm: int
+
+    def width(self, text: str) -> float:
+        return sum(self.advances.get(c, self.default) for c in text) / self.upm * self.em
+
+
+def _font(style: CaptionStyle) -> _Font:
+    m = _font_metrics(style.metrics)
+    upm = m["units_per_em"]
+    em = style.size * upm / (m["win_ascent"] + m["win_descent"])
+    shift = (m["cap_height"] / 2 - (m["win_ascent"] - m["win_descent"]) / 2) / upm * em
+    return _Font(em, m["cap_height"] / upm * em, shift, m["advances"], m["default_advance"], upm)
+
+
+def _box(x: float, y: float, w: float, h: float, r: float) -> str:
+    """Rounded rectangle as an ASS vector drawing at top-left (x, y)."""
+    w, h, r = round(w), round(h), round(min(r, w / 2, h / 2))
+    path = (f"m {r} 0 l {w - r} 0 b {w} 0 {w} 0 {w} {r} l {w} {h - r} b {w} {h} {w} {h} {w - r} {h} "
+            f"l {r} {h} b 0 {h} 0 {h} 0 {h - r} l 0 {r} b 0 0 0 0 {r} 0")
+    return f"{{\\an7\\pos({round(x)},{round(y)})\\bord0\\shad0\\p1}}{path}{{\\p0}}"
+
+
+def _layout(texts: list[str], style: CaptionStyle, font: _Font, y: int) -> list[tuple[float, float, float, float]]:
+    """(centre x, caps centre y, width, scale) per word: lines of at most ``max_line_width``, centred."""
+    max_w = style.max_line_width * PLAY_W
+    gap = style.word_gap * font.em
+    widths = [font.width(t) for t in texts]
+    lines: list[list[int]] = [[]]
+    for i, w in enumerate(widths):
+        cur = lines[-1]
+        line_w = sum(widths[j] for j in cur) + gap * len(cur)
+        if cur and line_w + w > max_w:
+            lines.append([i])
+        else:
+            cur.append(i)
+    line_h = font.cap * style.box_height + style.line_gap
+    out: list[tuple[float, float, float, float]] = [(0.0, 0.0, 0.0, 1.0)] * len(texts)
+    for li, line in enumerate(lines):
+        total = sum(widths[j] for j in line) + gap * (len(line) - 1)
+        scale = min(1.0, max_w / total) if total else 1.0  # one very long word: shrink that line to fit
+        cy = y + (li - (len(lines) - 1) / 2) * line_h
+        x = PLAY_W / 2 - total * scale / 2
+        for j in line:
+            out[j] = (x + widths[j] * scale / 2, cy, widths[j] * scale, scale)
+            x += (widths[j] + gap) * scale
+    return out
 
 
 def build_ass(
@@ -150,12 +211,12 @@ def build_ass(
     title_duration: float = 2.8,
     groups: list[list[CaptionWord]] | None = None,
 ) -> str:
-    """``groups`` (from ``cues_to_groups``): captions edited by the user, shown exactly at their own times;
-    otherwise ``words`` are grouped automatically."""
-    style = PRESETS.get(preset, PRESETS["bold_white"])
-    emph = {normalize(e) for e in (emphasis or []) if e}
-    border_style = 3 if style.box else 1
-    back = ass_color(style.box_color, style.box_alpha) if style.box else ass_color("#000000", 0x80)
+    """ASS subtitles in the CapCut style. ``groups`` (from ``cues_to_groups``): captions edited by the user,
+    shown exactly at their own times; otherwise ``words`` are grouped automatically. ``emphasis`` is accepted
+    for compatibility; the template has no extra word colours."""
+    style = get_style(preset) or CAPCUT
+    font = _font(style)
+    shadow = ass_color(style.shadow_color, style.shadow_alpha)
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {PLAY_W}
@@ -166,49 +227,40 @@ YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{style.font},{style.size},{ass_color(style.color)},{ass_color(style.highlight)},{ass_color(style.outline_color)},{back},{-1 if style.bold else 0},0,0,0,100,100,0,0,{border_style},{style.outline if not style.box else 14},{style.shadow},5,90,150,0,1
-Style: Title,Montserrat ExtraBold,64,{ass_color('#111111')},{ass_color('#111111')},{ass_color('#FFFFFF')},{ass_color('#FFFFFF', 0)},-1,0,0,0,100,100,0,0,3,18,0,5,80,80,0,1
+Style: Cap,{style.font},{style.size},{ass_color(style.color)},{ass_color(style.color)},{ass_color(style.outline_color)},{shadow},0,0,0,0,100,100,0,0,1,{style.outline},{style.shadow},5,0,0,0,1
+Style: Box,{style.font},{style.size},{ass_color(style.box_color)},{ass_color(style.box_color)},{ass_color(style.box_color)},{ass_color(style.box_color)},0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: Title,{style.font},64,{ass_color('#111111')},{ass_color('#111111')},{ass_color('#FFFFFF')},{ass_color('#FFFFFF', 0)},0,0,0,0,100,100,0,0,3,18,0,5,80,80,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
-    pos = f"{{\\an5\\pos({PLAY_W // 2},{y})}}"
     exact = groups is not None
     if groups is None:
         groups = group_words(words, style)
     for gi, group in enumerate(groups):
         g_start = group[0].start
         g_end = group[-1].end if exact else _group_end(groups, gi)
-
-        def render(active: int | None, group: list[CaptionWord] = group) -> str:
-            parts = []
-            for i, w in enumerate(group):
-                txt = _escape(_display_text(w, style))
-                is_emph = normalize(w.text) in emph
-                if active is not None and i == active:
-                    colour = ass_color(style.highlight)
-                    scale = "\\fscx112\\fscy112" if style.pop else ""
-                    parts.append(f"{{\\c{colour}{scale}}}{txt}{{\\r}}")
-                elif is_emph:
-                    parts.append(f"{{\\c{ass_color(style.emphasis)}}}{txt}{{\\r}}")
-                else:
-                    parts.append(txt)
-            return " ".join(parts)
-
-        if style.karaoke:
-            for i, w in enumerate(group):
-                s = g_start if i == 0 else w.start
-                e = group[i + 1].start if i + 1 < len(group) else g_end
-                if e - s < 0.04:
-                    continue
-                events.append(f"Dialogue: 0,{_ts(s)},{_ts(e)},Cap,,0,0,0,,{pos}{render(i)}")
-        else:
-            events.append(f"Dialogue: 0,{_ts(g_start)},{_ts(g_end)},Cap,,0,0,0,,{pos}{render(None)}")
+        texts = [_display_text(w, style) for w in group]
+        places = _layout(texts, style, font, y)
+        for i, (w, txt, (cx, cy, width, scale)) in enumerate(zip(group, texts, places, strict=True)):
+            if not txt:
+                continue
+            fs = f"\\fscx{round(scale * 100)}\\fscy{round(scale * 100)}" if scale < 1 else ""
+            pos_y = cy + font.cap_shift * scale
+            events.append(f"Dialogue: 1,{_ts(g_start)},{_ts(g_end)},Cap,,0,0,0,,{{\\an5\\pos({cx:.1f},{pos_y:.1f}){fs}}}{_escape(txt)}")
+            # the spoken word sits on the box, from when it is said until the next word starts
+            s = g_start if i == 0 else w.start
+            e = group[i + 1].start if i + 1 < len(group) else g_end
+            if e - s < 0.04:
+                continue
+            bw = width + 2 * style.box_pad_x * font.em * scale
+            bh = font.cap * style.box_height * scale
+            events.append(f"Dialogue: 0,{_ts(s)},{_ts(e)},Box,,0,0,0,,{_box(cx - bw / 2, cy - bh / 2, bw, bh, style.box_radius)}")
 
     if title:
         tpos = f"{{\\an5\\pos({PLAY_W // 2},{int(PLAY_H * 0.16)})\\fad(120,200)}}"
-        events.append(f"Dialogue: 1,{_ts(0)},{_ts(title_duration)},Title,,0,0,0,,{tpos}{_escape(title[:70])}")
+        events.append(f"Dialogue: 2,{_ts(0)},{_ts(title_duration)},Title,,0,0,0,,{tpos}{_escape(title[:70])}")
     return header + "\n".join(events) + "\n"
 
 
@@ -226,7 +278,7 @@ class CaptionError(ValueError):
 def auto_cues(words: list[CaptionWord], preset: str, duration: float | None = None) -> list[dict]:
     """The automatic captions as editable cues [{start, end, text}] (clip time), timed like ``build_ass``
     and kept inside the clip, so saving them unchanged is always valid."""
-    style = PRESETS.get(preset, PRESETS["dynamic"])
+    style = get_style(preset) or CAPCUT
     limit = duration if duration is not None else math.inf
     groups: list[list[CaptionWord]] = []
     for g in group_words(sorted((w for w in words if w.start < limit - MIN_CUE), key=lambda w: w.start), style):

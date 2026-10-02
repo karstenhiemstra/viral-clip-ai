@@ -22,6 +22,7 @@ import {
   LAYOUT_LABELS,
   pct,
   PRESET_LABELS,
+  presetValue,
   STAGE_LABELS,
 } from "@/lib/format";
 import type { Clip } from "@/lib/types";
@@ -210,7 +211,7 @@ export default function ClipDetailPage() {
             <p className="text-xs font-semibold text-ink-2">Bewerken & opnieuw renderen</p>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Captions" hint={clip.captions_custom ? "Met je eigen aangepaste captions" : undefined}>
-                <Select className="w-full" value={clip.caption_preset ?? "dynamic"} onChange={(e) => patch({ caption_preset: e.target.value }, "Captions aangepast — clip wordt opnieuw gerenderd")}>
+                <Select className="w-full" value={presetValue(clip.caption_preset)} onChange={(e) => patch({ caption_preset: e.target.value }, "Captions aangepast — clip wordt opnieuw gerenderd")}>
                   {Object.entries(PRESET_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </Select>
               </Field>

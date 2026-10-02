@@ -21,25 +21,72 @@ def test_ass_color():
     assert ass_color("#3CFF6B", 0x80) == "&H806BFF3C"
 
 
+def _events(ass: str, style: str) -> list[str]:
+    return [line for line in ass.splitlines() if line.startswith("Dialogue:") and f",{style}," in line]
+
+
 def test_caption_grouping_and_ass_output():
     words = [CaptionWord(i * 0.4, i * 0.4 + 0.35, t) for i, t in enumerate("Wacht wat?! Dit is echt niet normaal jongens".split())]
-    groups = group_words(words, PRESETS["dynamic"])
+    groups = group_words(words, PRESETS["capcut"])
     assert [" ".join(w.text for w in g) for g in groups][0] == "Wacht wat?!"
-    assert all(len(g) <= PRESETS["dynamic"].max_words for g in groups)
-    ass = build_ass(words, "dynamic", y=1300, emphasis=["normaal"], title="Hook {titel}")
-    assert "PlayResY: 1920" in ass and "WACHT" in ass
-    assert ass.count("Dialogue:") >= len(words)  # karaoke: one event per word (+ title)
-    assert "\\pos(540,1300)" in ass
+    assert all(len(g) <= 4 for g in groups)
+    ass = build_ass(words, "capcut", y=1459, emphasis=["normaal"], title="Hook {titel}")
+    assert "PlayResY: 1920" in ass and "WACHT" in ass and "WAT?!" in ass
+    assert len(_events(ass, "Cap")) == len(words)  # every word placed on its own
+    assert len(_events(ass, "Box")) == len(words)  # and gets the box while it is spoken
     assert "{titel}" not in ass  # braces are escaped
-    minimal = build_ass(words, "minimal", y=1300)
-    assert "Wacht wat?!" in minimal and minimal.count("Dialogue:") == len(group_words(words, PRESETS["minimal"]))
+    # the old styles are gone: older clips/settings render with the CapCut style
+    for legacy in ("dynamic", "bold_white", "minimal"):
+        assert build_ass(words, legacy, y=1459) == build_ass(words, "capcut", y=1459)
+    assert "Montserrat" not in ass and "Style: Cap,Poppins ExtraBold,130,&H00FFFFFF" in ass
 
 
-def test_caption_position_avoids_faces():
-    assert caption_y(0.45, 0.2, "face") == int(1920 * 0.68)
-    assert caption_y(0.7, 0.3, "face") > int(1920 * 0.68)
-    assert caption_y(0.9, 0.4, "face") < 1920 * 0.3  # close-up -> captions above the face
+def test_caption_position_matches_template():
+    assert caption_y(0.45, 0.2, "face") == caption_y(0.9, 0.4, "face") == int(1920 * 0.76)
+    assert caption_y(None, None, "fit_blur") == int(1920 * 0.76)
     assert caption_y(None, None, "split") == 960
+
+
+def test_highlight_box_sits_exactly_behind_the_spoken_word():
+    import re
+
+    words = [CaptionWord(0.0, 0.3, "Ik"), CaptionWord(0.3, 0.6, "heb"), CaptionWord(0.6, 0.9, "het"), CaptionWord(0.9, 1.6, "allemaal.")]
+    ass = build_ass(words, "capcut", y=1459)
+    texts = [(float(m[0]), float(m[1]), m[2]) for m in re.findall(r"\\pos\(([\d.]+),([\d.]+)\)\}([^\n]+)", "\n".join(_events(ass, "Cap")))]
+    assert [t for _, _, t in texts] == ["IK", "HEB", "HET", "ALLEMAAL"]  # uppercase, no trailing full stop
+    assert texts[0][0] < texts[1][0] < texts[2][0] < texts[3][0]
+    assert abs((texts[0][0] + texts[-1][0]) / 2 - 540) < 120  # one line, centred
+    boxes = _events(ass, "Box")
+    assert [b.split(",")[1:3] for b in boxes] == [["0:00:00.00", "0:00:00.30"], ["0:00:00.30", "0:00:00.60"],
+                                                    ["0:00:00.60", "0:00:00.90"], ["0:00:00.90", "0:00:01.95"]]
+    for (cx, _cy, _), box in zip(texts, boxes, strict=True):
+        x, y = map(int, re.search(r"\\pos\((\d+),(\d+)\)", box).groups())
+        w = int(re.search(r" l (\d+) 0 ", box).group(1)) + 7  # right edge (minus the corner radius) + radius
+        assert abs(x + w / 2 - cx) <= 2  # box centred on its word
+        assert 1400 < y < 1459 < y + 80  # around the caption line at 76% of the height
+
+
+def test_template_font_and_colours_are_rendered(tmp_path, ffmpeg_available):
+    """Burn one caption into a frame: Poppins (bundled) renders, the spoken word sits on the blue box."""
+    if not ffmpeg_available:
+        pytest.skip("ffmpeg not installed")
+    import numpy as np
+
+    from app.config import get_settings
+
+    words = [CaptionWord(0.0, 0.5, "Ik"), CaptionWord(0.5, 1.0, "heb"), CaptionWord(1.0, 1.5, "het"), CaptionWord(1.5, 2.5, "allemaal")]
+    (tmp_path / "c.ass").write_text(build_ass(words, "capcut", y=1459), encoding="utf-8")
+    fonts = ffmpeg.escape_filter_path(get_settings().fonts_dir)
+    ffmpeg.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=0x404040:s=1080x1920:d=2", "-vf",
+                f"ass=filename={ffmpeg.escape_filter_path(tmp_path / 'c.ass')}:fontsdir={fonts}", "-ss", "1.8",
+                "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", str(tmp_path / "f.rgb")])
+    img = np.frombuffer((tmp_path / "f.rgb").read_bytes(), dtype=np.uint8).reshape(1920, 1080, 3).astype(int)
+    band = img[1400:1520]
+    blue = (band[..., 2] > 200) & (band[..., 0] < 80) & (band[..., 1] > 130)
+    white = (band > 235).all(axis=-1)
+    assert blue.sum() > 5000 and white.sum() > 5000
+    cols = np.where(blue.any(axis=0))[0]
+    assert cols.min() > 540 - 50  # the box is on the last word (right half), not on the whole line
 
 
 def test_audio_profile_and_peaks():
@@ -183,7 +230,7 @@ def test_ffmpeg_accepts_the_eased_crop_expression(tmp_path, ffmpeg_available):
     assert (info.width, info.height) == (202, 360)
 
 
-@pytest.mark.parametrize("preset,layout", [("dynamic", "auto"), ("bold_white", "center"), ("minimal", "fit_blur"), ("none", "center")])
+@pytest.mark.parametrize("preset,layout", [("capcut", "auto"), ("dynamic", "center"), ("capcut", "fit_blur"), ("none", "center")])
 def test_render_vertical_clip(test_video, tmp_path, preset, layout):
     info = ffmpeg.probe(test_video)
     words = [(5.0 + i * 0.4, 5.35 + i * 0.4, w) for i, w in enumerate("Wacht wat dit is echt niet normaal".split())]

@@ -38,7 +38,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 
 DEFAULT_STAGE_WEIGHTS: dict[str, float] = {"stop": 0.40, "hold": 0.35, "engage": 0.25}
 
-CAPTION_PRESETS = ("bold_white", "dynamic", "minimal", "none")
+CAPTION_PRESETS = ("capcut", "none")  # the CapCut template; older names ("dynamic", ...) render as capcut
 LAYOUTS = ("auto", "face", "center", "fit_blur", "split")
 PERIODS = ("today", "24h", "7d", "30d", "custom", "all")
 
@@ -80,7 +80,7 @@ class ClipSettings(BaseModel):
     max_per_video: int = Field(5, ge=1, le=30)
     remove_silences: bool = True
     silence_min_gap: float = Field(0.6, ge=0.2, le=3.0)  # pauses longer than this get shortened
-    caption_preset: Literal["bold_white", "dynamic", "minimal", "none"] = "dynamic"
+    caption_preset: Literal["capcut", "none", "bold_white", "dynamic", "minimal"] = "capcut"
     layout: Literal["auto", "face", "center", "fit_blur", "split"] = "auto"
     add_hook_title: bool = False  # burn the AI hook title into the first seconds
 

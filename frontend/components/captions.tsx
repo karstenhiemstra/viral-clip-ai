@@ -98,7 +98,7 @@ export function CaptionEditor({
   const cursor = useRef<Record<number, number>>({});
   const [rows, setRows] = useState<Row[] | null>(null);
   const [savedJson, setSavedJson] = useState("");
-  const [meta, setMeta] = useState<{ duration: number; preset: string; custom: boolean }>({ duration: clip.duration, preset: "dynamic", custom: false });
+  const [meta, setMeta] = useState<{ duration: number; preset: string; custom: boolean }>({ duration: clip.duration, preset: "capcut", custom: false });
   const [busy, setBusy] = useState<"" | "preview" | "save" | "render" | "reset">("");
   const [now, setNow] = useState(0);
   const [focusKey, setFocusKey] = useState<number | null>(null);

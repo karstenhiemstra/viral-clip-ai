@@ -33,7 +33,7 @@ class FeedbackIn(BaseModel):
 class ClipUpdate(BaseModel):
     start_time: float | None = Field(None, ge=0)
     end_time: float | None = Field(None, ge=0)
-    caption_preset: Literal["bold_white", "dynamic", "minimal", "none"] | None = None
+    caption_preset: Literal["capcut", "none", "bold_white", "dynamic", "minimal"] | None = None
     layout: Literal["auto", "face", "center", "fit_blur", "split"] | None = None
     title: str | None = Field(None, max_length=300)
     published: bool | None = None

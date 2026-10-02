@@ -27,13 +27,14 @@ def _words(start: float = 0.0) -> list[CaptionWord]:
 
 
 def _dialogues(ass: str) -> list[str]:
-    return [line for line in ass.splitlines() if line.startswith("Dialogue: 0,")]
+    """The caption text events (one per word)."""
+    return [line for line in ass.splitlines() if line.startswith("Dialogue: 1,") and ",Cap," in line]
 
 
 def test_automatic_cues_are_the_captions_that_get_rendered():
     words = _words()
-    cues = auto_cues(words, "dynamic")
-    assert [c["text"] for c in cues] == [" ".join(w.text for w in g) for g in group_words(words, PRESETS["dynamic"])]
+    cues = auto_cues(words, "capcut")
+    assert [c["text"] for c in cues] == [" ".join(w.text for w in g) for g in group_words(words, PRESETS["capcut"])]
     assert all(0 <= c["start"] < c["end"] for c in cues)
     assert all(a["end"] <= b["start"] for a, b in zip(cues, cues[1:], strict=False))  # never overlapping
 
@@ -44,7 +45,7 @@ def test_automatic_cues_can_always_be_saved_unchanged():
     words = [CaptionWord(0.0, 0.3, "Hallo"), CaptionWord(2.0, 2.1, "ja."), CaptionWord(0.4, 0.8, "allemaal."),
              CaptionWord(2.04, 2.3, "en"), CaptionWord(2.35, 2.6, "toen"),
              CaptionWord(3.6, 3.9, "einde"), CaptionWord(4.2, 4.6, "erna")]
-    cues = auto_cues(words, "dynamic", duration=4.0)
+    cues = auto_cues(words, "capcut", duration=4.0)
     assert validate_cues(cues, duration=4.0) == cues
     assert [c["text"] for c in cues] == ["Hallo allemaal.", "ja. en toen", "einde"]
     assert cues[-1]["end"] <= 4.0
@@ -92,20 +93,21 @@ def test_edited_captions_render_with_the_existing_style_and_their_own_times():
     # more/other words: the cue's time is shared out, in order and inside the cue
     assert all(g[i].end <= g[i + 1].start + 1e-9 for g in groups for i in range(len(g) - 1))
 
-    ass = build_ass(words, "dynamic", y=1300, groups=groups)
+    ass = build_ass(words, "capcut", y=1459, groups=groups)
     lines = _dialogues(ass)
-    assert len(lines) == sum(len(g) for g in groups)  # karaoke: one event per word, as before
-    assert lines[0].startswith("Dialogue: 0,0:00:00.00,") and "DIT" in lines[0]  # uppercase style kept
+    assert len(lines) == sum(len(g) for g in groups)  # one placed event per word
+    assert lines[0].startswith("Dialogue: 1,0:00:00.00,") and "DIT" in lines[0]  # uppercase style kept
     assert any("0:00:06.00,Cap" in line and "TOEGEVOEGD" in line for line in lines)  # ends exactly at its end
-    assert "JONGENS!" in ass and "Style: Cap,Montserrat Black,98" in ass  # same font/size/colours as before
+    assert "JONGENS!" in ass and "Style: Cap,Poppins ExtraBold,130" in ass  # the template style
+    assert sum(",Box," in line for line in ass.splitlines()) == sum(len(g) for g in groups)  # highlight per word
     assert not any("TOT" in line for line in lines)  # deleted words are gone
-    assert _dialogues(build_ass(words, "dynamic", y=1300, groups=[])) == []  # all captions deleted
+    assert _dialogues(build_ass(words, "capcut", y=1459, groups=[])) == []  # all captions deleted
 
 
 def test_automatic_captions_unchanged_without_edits():
     words = _words()
-    assert build_ass(words, "bold_white", y=1300) == build_ass(words, "bold_white", y=1300, groups=None)
-    assert len(_dialogues(build_ass(words, "bold_white", y=1300))) == len(group_words(words, PRESETS["bold_white"]))
+    assert build_ass(words, "capcut", y=1459) == build_ass(words, "capcut", y=1459, groups=None)
+    assert len(_dialogues(build_ass(words, "capcut", y=1459))) == len(words)
 
 
 def _clip_on_test_video(client, db, test_video) -> Clip:
@@ -114,7 +116,7 @@ def _clip_on_test_video(client, db, test_video) -> Clip:
     words = [[w.start + 5.0, w.end + 5.0, w.text] for w in _words()]
     clip = Clip(
         video_id=r.json()["id"], start_time=5.0, end_time=11.0, duration=6.0, segments=[[5.0, 11.0]], words=words,
-        transcript_text=" ".join(SPOKEN), viral_score=80, caption_preset="dynamic", layout="center",
+        transcript_text=" ".join(SPOKEN), viral_score=80, caption_preset="capcut", layout="center",
         status=ClipStatus.PENDING_RENDER,
     )
     db.add(clip)
@@ -141,7 +143,7 @@ def test_caption_editor_api_save_preview_and_render(client, db, test_video, monk
     assert "GRAPPIG" in rendered[-1]
 
     auto = client.get(f"/api/clips/{clip.id}/captions").json()
-    assert auto["custom"] is False and auto["duration"] == 6.0 and auto["caption_preset"] == "dynamic"
+    assert auto["custom"] is False and auto["duration"] == 6.0 and auto["caption_preset"] == "capcut"
     assert auto["captions"][0]["start"] == 0.0 and auto["captions"][0]["text"].startswith("Dit is")
 
     edited = [
