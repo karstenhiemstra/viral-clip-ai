@@ -74,7 +74,7 @@ def render_clip(
         raise ValueError("Geen segmenten om te renderen")
     base = segments[0][0]
     span_end = segments[-1][1]
-    plan = plan_crop(media, info, segments, layout=layout, scene_cuts=scene_cuts) if layout != "audio" else CropPlan(
+    plan = plan_crop(media, info, segments, layout=layout, scene_cuts=scene_cuts, words=words) if layout != "audio" else CropPlan(
         "audio", OUT_W, OUT_H, OUT_W, OUT_H
     )
     fps = int(round(min(60.0, info.fps or 30.0))) or 30

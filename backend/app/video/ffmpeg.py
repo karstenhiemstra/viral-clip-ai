@@ -6,6 +6,7 @@ import json
 import logging
 import shutil
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -136,12 +137,17 @@ def extract_audio(
     return dst
 
 
-def decode_pcm(src: Path, sample_rate: int = 8000) -> np.ndarray:
-    """Decode the whole audio track to mono float32 in [-1, 1]. 8 kHz is plenty for loudness features."""
-    proc = run(
-        [ffmpeg_bin(), "-v", "error", "-i", str(src), "-vn", "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-"],
-        timeout=3600,
-    )
+def decode_pcm(src: Path, sample_rate: int = 8000, start: float | None = None, duration: float | None = None) -> np.ndarray:
+    """Decode the audio track (or [start, start+duration)) to mono float32 in [-1, 1]. 8 kHz is plenty
+    for loudness features."""
+    cmd = [ffmpeg_bin(), "-v", "error"]
+    if start is not None:
+        cmd += ["-ss", f"{max(0.0, start):.3f}"]
+    cmd += ["-i", str(src)]
+    if duration is not None:
+        cmd += ["-t", f"{max(0.05, duration):.3f}"]
+    cmd += ["-vn", "-ac", "1", "-ar", str(sample_rate), "-f", "s16le", "-"]
+    proc = run(cmd, timeout=3600)
     return np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
 
 
@@ -154,36 +160,41 @@ def extract_frame(src: Path, t: float, dst: Path, width: int | None = None) -> P
     return dst
 
 
-def read_frames(src: Path, start: float, end: float, fps: float, width: int) -> tuple[np.ndarray, int, int]:
-    """Decode [start, end) at ``fps`` scaled to ``width`` px. Returns (frames[N,H,W,3] BGR, W, H)."""
+def frame_reader(src: Path, start: float, end: float, fps: float, width: int) -> tuple[Iterator[np.ndarray], int, int]:
+    """Stream [start, end) at ``fps`` scaled to ``width`` px, one BGR frame at a time (constant memory
+    however long the clip). Returns (iterator, W, H)."""
     info = probe(src)
     size = info.display_size or (16, 9)
     height = int(round(width * size[1] / size[0] / 2) * 2)
-    proc = run(
-        [
-            ffmpeg_bin(),
-            "-v",
-            "error",
-            "-ss",
-            f"{max(0.0, start):.3f}",
-            "-i",
-            str(src),
-            "-t",
-            f"{max(0.1, end - start):.3f}",
-            "-vf",
-            f"fps={fps},scale={width}:{height}",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "bgr24",
-            "-",
-        ],
-        timeout=1200,
-    )
-    frame_size = width * height * 3
-    n = len(proc.stdout) // frame_size
-    frames = np.frombuffer(proc.stdout[: n * frame_size], dtype=np.uint8).reshape(n, height, width, 3)
-    return frames, width, height
+    cmd = [
+        ffmpeg_bin(), "-v", "error", "-ss", f"{max(0.0, start):.3f}", "-i", str(src), "-t", f"{max(0.1, end - start):.3f}",
+        "-vf", f"fps={fps},scale={width}:{height}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+    ]
+
+    def frames() -> Iterator[np.ndarray]:
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except FileNotFoundError as e:
+            raise FFmpegError(f"{cmd[0]} niet gevonden. Installeer ffmpeg (zie README).") from e
+        frame_size = width * height * 3
+        count = 0
+        try:
+            assert proc.stdout is not None
+            while True:
+                buf = proc.stdout.read(frame_size)
+                if len(buf) < frame_size:
+                    break
+                count += 1
+                yield np.frombuffer(buf, dtype=np.uint8).reshape(height, width, 3)
+            if proc.wait() != 0 and count == 0:
+                raise FFmpegError(f"ffmpeg kon geen beelden lezen uit {src.name}")
+        finally:
+            if proc.stdout is not None:
+                proc.stdout.close()
+            proc.kill()
+            proc.wait()
+
+    return frames(), width, height
 
 
 def escape_filter_path(path: Path | str) -> str:
