@@ -15,7 +15,7 @@ from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
-from app.config import get_settings
+from app.config import get_settings, openai_base_url
 from app.services.settings_store import RuntimeSettings, get_secret
 
 # USD per 1M tokens: (input, output, cached input). Prefix match; unknown models are costed at 0.
@@ -95,6 +95,18 @@ class LLMError(RuntimeError):
 
 class LLMRefusal(LLMError):
     pass
+
+
+def connection_error_message(service: str, error: BaseException, base_url: object) -> str:
+    """'Connection error.' from the SDK hides the real reason; dig out the underlying network error."""
+    root: BaseException = error
+    while (root.__cause__ or root.__context__) is not None and len(str(root.__cause__ or root.__context__)) > 0:
+        root = root.__cause__ or root.__context__  # type: ignore[assignment]
+    detail = f"{type(root).__name__}: {root}" if root is not error else str(error)
+    return (
+        f"{service} API niet bereikbaar via {base_url} ({detail}). Controleer je internetverbinding, VPN/firewall "
+        "en of OPENAI_BASE_URL in .env leeg of correct is."
+    )
 
 
 class LLMFatalError(LLMError):
@@ -195,7 +207,7 @@ def get_llm(db: Session | None, rs: RuntimeSettings) -> LLMClient | None:
         models, efforts = resolve_models("openai", ai.quality, ai.model_fast, ai.model_smart, ai.vision_model)
         return OpenAIProvider(
             api_key=openai_key,
-            base_url=get_settings().openai_base_url or None,
+            base_url=openai_base_url(),
             models=models,
             efforts=efforts,
             embedding_model=get_settings().embedding_model,

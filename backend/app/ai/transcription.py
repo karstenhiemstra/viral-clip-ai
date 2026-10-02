@@ -38,10 +38,15 @@ class Transcriber(Protocol):
     def transcribe(self, media: Path, language: str | None, duration: float) -> tuple[list[Word], str | None]: ...
 
 
-def _friendly_openai_error(e: Exception) -> str:
+def _friendly_openai_error(e: Exception, base_url: object = None) -> str:
     import openai
 
+    from app.ai.llm import connection_error_message
+
     text = str(e)
+    if isinstance(e, openai.APIConnectionError):
+        log.warning("Whisper connection failed", exc_info=True)
+        return "Whisper: " + connection_error_message("OpenAI", e, base_url)
     if isinstance(e, openai.AuthenticationError):
         return "Whisper: ongeldige OPENAI_API_KEY. Maak een nieuwe key op platform.openai.com → API keys."
     if isinstance(e, openai.RateLimitError) and ("insufficient_quota" in text or "exceeded your current quota" in text.lower()):
@@ -56,7 +61,9 @@ class OpenAITranscriber:
     def __init__(self, api_key: str, model: str = "whisper-1", base_url: str | None = None):
         from openai import OpenAI
 
-        self.client = OpenAI(api_key=api_key, base_url=base_url or None)
+        from app.config import openai_base_url
+
+        self.client = OpenAI(api_key=api_key, base_url=base_url or openai_base_url())
         self.model = model
 
     def transcribe(self, media: Path, language: str | None, duration: float) -> tuple[list[Word], str | None]:
@@ -81,7 +88,7 @@ class OpenAITranscriber:
                     try:
                         resp = self.client.audio.transcriptions.create(**kwargs)
                     except Exception as e:  # SDK raises typed errors; surface a readable message
-                        raise TranscriptionError(_friendly_openai_error(e)) from e
+                        raise TranscriptionError(_friendly_openai_error(e, self.client.base_url)) from e
                 record_usage(
                     "openai", "transcription", units=chunk_len / 60, cost_usd=chunk_len / 60 * WHISPER_PRICE_PER_MIN
                 )
@@ -159,9 +166,9 @@ def get_transcriber(db: Session | None, rs: RuntimeSettings) -> Transcriber | No
     if choice == "none":
         return None
     if choice in ("openai", "auto") and openai_key:
-        from app.config import get_settings
+        from app.config import openai_base_url
 
-        return OpenAITranscriber(openai_key, rs.ai.whisper_model or "whisper-1", get_settings().openai_base_url)
+        return OpenAITranscriber(openai_key, rs.ai.whisper_model or "whisper-1", openai_base_url())
     if choice in ("faster_whisper", "auto"):
         try:
             return FasterWhisperTranscriber(rs.ai.faster_whisper_model or "small")

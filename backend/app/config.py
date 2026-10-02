@@ -118,3 +118,20 @@ def get_settings() -> Settings:
     s = Settings()
     s.ensure_dirs()
     return s
+
+
+OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
+
+def openai_base_url() -> str:
+    """The OpenAI API URL to use - always explicit, never None.
+
+    When the OpenAI SDK gets ``base_url=None`` it reads the ``OPENAI_BASE_URL`` environment variable
+    itself. Docker passes the empty ``OPENAI_BASE_URL=`` line of .env as an empty string, which the SDK
+    then uses as the URL: every call fails with "Connection error." without leaving the container."""
+    url = (get_settings().openai_base_url or "").strip().strip("\"'").strip()
+    if not url:
+        return OPENAI_DEFAULT_BASE_URL
+    if "://" not in url:
+        url = "https://" + url
+    return url.rstrip("/")

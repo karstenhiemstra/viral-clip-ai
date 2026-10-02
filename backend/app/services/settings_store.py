@@ -264,7 +264,7 @@ def get_secret(db: Session | None, name: str) -> str:
                 return _fernet().decrypt(token.encode()).decode()
             except InvalidToken:
                 pass
-    return str(getattr(get_settings(), name, "") or "")
+    return str(getattr(get_settings(), name, "") or "").strip()
 
 
 def mask(value: str) -> str:

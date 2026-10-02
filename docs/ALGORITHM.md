@@ -15,6 +15,7 @@ Dit document beschrijft hoe ViralClip AI van een lange video naar een Top 5 komt
 | 9 | Viral Score (funnel) + persoonlijke bijsturing | `ai/scoring.py`, `services/learning.py` |
 | 5* | Optionele vision-check van alleen de beste kandidaten | `ai/vision.py` |
 | 8 | Duplicate-detectie + diverse Top-K (MMR) | `ai/dedupe.py` |
+| — | Rendering: 9:16 met de actieve spreker in het midden | `video/reframe.py`, `video/render.py` |
 
 ## Stage 0 — Voorbereiding (gratis, lokaal)
 
@@ -97,6 +98,19 @@ Elke clip bewaart de featurevector waarmee hij gescoord is (12 dimensies, hook-,
 - en/of performance: views (log, genormaliseerd per creator), completion rate en engagement-ratio.
 
 Vanaf 12 clips wordt een ridge-regressie getraind (automatisch elke 10 nieuwe beoordelingen, of via Analytics → *Leermodel trainen*). De bijsturing op nieuwe clips is begrensd (±12 punten) en schaalt met de **cross-gevalideerde** betrouwbaarheid en het aantal voorbeelden — een model dat niets voorspelt, stuurt niets bij. De Analytics-pagina toont inzichten zoals *"Clips met de interessante info direct in de eerste seconde presteren gemiddeld 34% beter"* en een kalibratiegrafiek (scoregroep → aandeel positief beoordeeld).
+
+## Rendering — wie praat er?
+
+Een 16:9-video wordt een 9:16-clip door een smalle strook uit te snijden (`backend/app/video/reframe.py`). De regel: **de persoon die op dat moment praat staat zichtbaar en bij voorkeur in het midden.**
+
+1. **Gezichten zoeken en volgen.** 25 beelden/s op 640 px. YuNet (met ogen- en mondhoekpunten), anders OpenCV Haar. Gezichten worden per shot gevolgd (een camerawissel begint opnieuw); als iemand even wegkijkt of een hand voor het gezicht houdt, wordt tot 1,5 s overbrugd.
+2. **Lip-beweging, zonder hoofdbeweging.** Per gezicht een uitsnede van mond + kin, opgehangen aan de ogen (die bewegen niet als de kaak beweegt) en over 5 beelden gestabiliseerd. Beweging van de mond min beweging rond de ogen = praten; knikken of wiegen telt niet mee.
+3. **Wie praat er?** Terwijl er gesproken wordt (transcript-woorden, gecontroleerd met het geluid) krijgt elk gezicht bewijs voor (a) hoe goed het openen van de mond **meeloopt met het stemvolume** (audio-visuele synchronisatie; de kleine vertraging tussen beeld en geluid wordt per clip gemeten) en (b) zijn aandeel in alle lip-beweging. Iemand die kauwt of lacht zonder geluid verliest het van de echte spreker.
+4. **Rustig wisselen.** Een Viterbi-pad per shot kiest per beeld één spreker, met een prijs per wissel: een nieuwe spreker heeft ~0,5 s duidelijk bewijs nodig, beurten korter dan 0,8 s ("ja", "precies") houden de vorige spreker in beeld, en zonder bewijs (stilte, twijfel) blijft het beeld waar het is. Zonder enig bewijs: het grootste/meest centrale gezicht.
+5. **Camera.** Eén doel per beurt; alleen opnieuw centreren als de spreker echt uit een dode zone (14% van de breedte) loopt. Bewegingen zijn ease-in/ease-out (0,45–1,1 s, start net vóór de nieuwe spreker), een harde cut alleen op een camerawissel of jump-cut in de clip. De uitsnede is altijd volle hoogte (geen zoom-gepomp, geen afgesneden hoofden) en blijft binnen het beeld (geen zwarte balken).
+6. **Layout.** `face` (spreker volgen), `split` (alleen bij twee ver uit elkaar zittende mensen die heel snel om en om praten), `fit_blur` (geen gezichten), `center`. De keuze en statistieken (aantal sprekers, wissels, % van de tijd dat de spreker volledig in beeld is) staan in `render_meta.crop` van elke clip.
+
+Gemeten op 5 testvideo's met echte gezichten en eigen stemmen (podcast met een kort "ja", een zwijgende persoon die knikt en kauwt, camerawissel met spreker van links naar rechts, twee half overlappende mensen, een lopende spreker en scheve/gedraaide hoofden): met YuNet is de spreker 95–100% van de tijd in beeld en na 1 s 100% gecentreerd (was 29–74% resp. 34–92%), 0 sprongen (was 1–3 per clip), en het beeld is gemiddeld 0,2–0,3 s na een sprekerwissel bij de nieuwe spreker (was 1,1–4,7 s).
 
 ## Kosten per stap
 

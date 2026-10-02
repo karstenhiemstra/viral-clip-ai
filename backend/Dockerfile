@@ -25,7 +25,8 @@ PY
 RUN pip install -r /tmp/requirements.txt \
     && if [ "$INSTALL_LOCAL_WHISPER" = "true" ]; then pip install "faster-whisper>=1.0"; fi
 
-# Optional: better face detector (YuNet). Falls back to OpenCV's Haar cascades if unavailable.
+# Better face detector (YuNet, with face landmarks for lip tracking). If this download fails the app
+# retries at runtime and uses OpenCV's Haar cascades until then.
 RUN mkdir -p /opt/models \
     && (curl -fsSL -o /opt/models/face_detection_yunet.onnx \
         https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx \
@@ -38,7 +39,6 @@ COPY app ./app
 
 ENV DATA_DIR=/data \
     FACE_MODEL_PATH=/opt/models/face_detection_yunet.onnx \
-    FACE_MODEL_URL="" \
     HF_HOME=/data/hf-cache
 RUN mkdir -p /data
 
