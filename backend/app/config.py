@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     whisper_model: str = "whisper-1"
     faster_whisper_model: str = "small"
     embedding_model: str = "text-embedding-3-small"
+    # Captions are a transcription of what is said, in the spoken language. Translation is not offered:
+    # keep this false (true only logs a warning; captions still stay in the spoken language).
+    translate_captions: bool = False
 
     # --- worker -----------------------------------------------------------------
     worker_poll_seconds: float = 2.0

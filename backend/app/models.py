@@ -176,7 +176,9 @@ class Transcript(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id", ondelete="CASCADE"), unique=True)
     source: Mapped[str] = mapped_column(String(32))  # openai_whisper | faster_whisper | upload_srt | ...
-    language: Mapped[str | None] = mapped_column(String(8))
+    language: Mapped[str | None] = mapped_column(String(8))  # spoken language = caption language
+    # detected_language, caption_language, translation_applied (always false), confidence, languages, ...
+    language_info: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True, default=None)
     # [[start, end, "word"], ...] - compact on purpose (a 30 min video is ~5k words).
     words: Mapped[list[list[Any]]] = mapped_column(JSONType, default=list)
     full_text: Mapped[str] = mapped_column(Text, default="")

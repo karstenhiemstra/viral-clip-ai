@@ -92,6 +92,16 @@ def render_existing_clips(db: Session, video: Video) -> int:
     return n
 
 
+def subtitle_language(text: str, header: str | None, fallback: str | None) -> tuple[str | None, dict]:
+    """Uploaded subtitles are used as they are: their language is the caption language."""
+    from app.ai.language import Piece, language_code, language_report, translate_captions_requested
+
+    report = language_report([Piece(0.0, language_code(header), text)], "subtitles", translate_captions_requested())
+    lang = report["caption_language"] or language_code(header) or fallback
+    report["detected_language"] = report["caption_language"] = lang
+    return lang, report
+
+
 def import_subtitles(db: Session, video: Video, text: str, filename: str, *, queue_analysis: bool = True) -> Transcript:
     from app.ai.transcription import parse_subtitles
 
@@ -103,7 +113,7 @@ def import_subtitles(db: Session, video: Video, text: str, filename: str, *, que
     tr.words = [[round(w.start, 3), round(w.end, 3), w.text] for w in words]
     tr.full_text = " ".join(w.text for w in words)
     tr.word_timing = "interpolated"
-    tr.language = language or video.language
+    tr.language, tr.language_info = subtitle_language(tr.full_text, language, video.language)
     if video.transcript is None:
         db.add(tr)
     db.commit()

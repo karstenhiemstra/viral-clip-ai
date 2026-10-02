@@ -134,19 +134,22 @@ def ensure_transcript(db: Session, video: Video, creator: Creator | None, rs: Ru
         )
     duration = float(video.media_meta.get("duration") or video.duration_seconds or 0)
     progress(5, f"Transcriberen met {transcriber.name} ({duration / 60:.0f} min audio)")
-    language = (creator.language if creator else None) or video.language or rs.ai.output_language
+    # No language is passed on purpose: the spoken language is detected (per piece of audio) and the words
+    # are written down as they are said. The interface or creator language never changes the captions.
     try:
-        words, detected = transcriber.transcribe(media, language, duration)
+        words, report = transcriber.transcribe(media, duration)
     except TranscriptionError:
         raise
     except Exception as e:  # pragma: no cover - backend specific
         raise TranscriptionError(str(e)) from e
     if not words:
         raise AnalysisError("De transcriptie is leeg (geen spraak gevonden?)")
+    log.info("Spoken language of video %s: %s", video.id, report)
     tr = Transcript(
         video_id=video.id,
         source=transcriber.name,
-        language=detected or language,
+        language=report.get("caption_language"),
+        language_info=report,
         words=[w.to_row() for w in words],
         full_text=" ".join(w.text for w in words),
         word_timing="exact",

@@ -319,6 +319,7 @@ Alle variabelen staan met uitleg in [`.env.example`](.env.example). Alles wat je
 | `LLM_QUALITY` | `balanced` | `budget` / `balanced` / `best` |
 | `LLM_MODEL_FAST` / `LLM_MODEL_SMART` | volgt `LLM_QUALITY` | model voor pass 1 / pass 3 overschrijven |
 | `TRANSCRIBER` | `auto` | `openai` / `faster_whisper` / `none` |
+| `TRANSLATE_CAPTIONS` | `false` | captions blijven altijd in de gesproken taal (automatisch herkend, ook per zin); niet vertalen |
 | `OPENAI_BASE_URL` | — | OpenAI-compatibele server (OpenRouter, lokale Ollama/vLLM) |
 | `DATABASE_URL` | SQLite | zie hierboven |
 | `STORAGE_BACKEND` | `local` | `local` of `s3` (+ `S3_*`) |

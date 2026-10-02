@@ -1,5 +1,10 @@
 """Speech-to-text with word timestamps + subtitle file parsing.
 
+Captions are a transcription of what is SAID, in the language it is said in - never a translation. So no
+language is ever forced on the speech-to-text (not the interface language, not the creator's setting): the
+spoken language is detected per piece of audio and mixed-language speech keeps its language per piece.
+See ``app.ai.language`` for the language metadata stored with each transcript.
+
 Backends:
 * ``openai``         - Whisper API (``whisper-1``, word timestamps). ~$0.006/min.
 * ``faster_whisper`` - local, free, CPU/GPU (``pip install '.[local-whisper]'``).
@@ -12,11 +17,14 @@ import html
 import logging
 import re
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Protocol
 
+import numpy as np
 from sqlalchemy.orm import Session
 
+from app.ai.language import UNCERTAIN, Piece, language_report, translate_captions_requested
 from app.ai.transcript import Word, interpolate_words
 from app.services.settings_store import RuntimeSettings, get_secret
 from app.services.usage import record_usage
@@ -25,7 +33,11 @@ from app.video import ffmpeg
 log = logging.getLogger(__name__)
 
 WHISPER_PRICE_PER_MIN = 0.006
-CHUNK_SECONDS = 20 * 60
+# Whisper picks the language from the first 30 s of a request and then writes everything in it. One piece of
+# at most ~30 s per request (cut in a pause) lets every piece keep the language that is actually spoken.
+PIECE_SECONDS = 29.0
+PIECE_MIN_SECONDS = 18.0
+PARALLEL_REQUESTS = 3
 
 
 class TranscriptionError(RuntimeError):
@@ -35,7 +47,54 @@ class TranscriptionError(RuntimeError):
 class Transcriber(Protocol):
     name: str
 
-    def transcribe(self, media: Path, language: str | None, duration: float) -> tuple[list[Word], str | None]: ...
+    def transcribe(self, media: Path, duration: float) -> tuple[list[Word], dict]:
+        """(words in the spoken language, language report - see ``app.ai.language.language_report``)."""
+        ...
+
+
+class AudioLevels:
+    """Loudness per 50 ms of the whole audio track: where the pauses are, which parts are silent."""
+
+    HOP = 0.05
+
+    def __init__(self, media: Path):
+        self.db: np.ndarray | None = None
+        try:
+            sr = 4000
+            pcm = ffmpeg.decode_pcm(media, sr)
+            hop = int(sr * self.HOP)
+            n = len(pcm) // hop
+            if n:
+                frames = pcm[: n * hop].astype(np.float64).reshape(n, hop)
+                self.db = 20 * np.log10(np.sqrt((frames**2).mean(axis=1)) + 1e-6)
+        except ffmpeg.FFmpegError as e:
+            log.info("No audio levels (%s); cutting at fixed times", e)
+
+    def quietest(self, lo: float, hi: float) -> float:
+        if self.db is None:
+            return hi
+        a, b = int(lo / self.HOP), int(hi / self.HOP)
+        seg = self.db[a:b]
+        return (a + int(np.argmin(seg))) * self.HOP if len(seg) else hi
+
+    def silent(self, a: float, b: float) -> bool:
+        """Nothing audible at all (never skip quiet speech or speech over music)."""
+        if self.db is None or not len(self.db):
+            return False
+        seg = self.db[int(a / self.HOP): int(b / self.HOP)]
+        return len(seg) > 0 and float(seg.max()) < -50.0
+
+
+def plan_pieces(levels: AudioLevels, duration: float) -> list[tuple[float, float]]:
+    """Pieces of at most ~30 s, cut at the quietest moment (a pause between words)."""
+    pieces, t = [], 0.0
+    while duration - t > PIECE_SECONDS:
+        cut = levels.quietest(t + PIECE_MIN_SECONDS, t + PIECE_SECONDS)
+        pieces.append((t, cut))
+        t = cut
+    if duration - t > 0.3:
+        pieces.append((t, duration))
+    return pieces
 
 
 def _friendly_openai_error(e: Exception, base_url: object = None) -> str:
@@ -63,47 +122,54 @@ class OpenAITranscriber:
 
         from app.config import openai_base_url
 
-        self.client = OpenAI(api_key=api_key, base_url=base_url or openai_base_url())
+        self.client = OpenAI(api_key=api_key, base_url=base_url or openai_base_url(), max_retries=4)
         self.model = model
 
-    def transcribe(self, media: Path, language: str | None, duration: float) -> tuple[list[Word], str | None]:
-        words: list[Word] = []
-        detected: str | None = None
-        with tempfile.TemporaryDirectory(prefix="vc-stt-") as tmp:
-            offset = 0.0
-            idx = 0
-            total = max(duration, 1.0)
-            while offset < total - 0.5:
-                chunk_len = min(CHUNK_SECONDS, total - offset)
-                audio = ffmpeg.extract_audio(media, Path(tmp) / f"chunk{idx}.mp3", start=offset, duration=chunk_len)
-                with open(audio, "rb") as f:
-                    kwargs = {
-                        "model": self.model,
-                        "file": f,
-                        "response_format": "verbose_json",
-                        "timestamp_granularities": ["word", "segment"],
-                    }
-                    if language:
-                        kwargs["language"] = language
-                    try:
-                        resp = self.client.audio.transcriptions.create(**kwargs)
-                    except Exception as e:  # SDK raises typed errors; surface a readable message
-                        raise TranscriptionError(_friendly_openai_error(e, self.client.base_url)) from e
-                record_usage(
-                    "openai", "transcription", units=chunk_len / 60, cost_usd=chunk_len / 60 * WHISPER_PRICE_PER_MIN
+    def _piece(self, media: Path, tmp: Path, tag: str, start: float, end: float) -> tuple[list[Word], Piece]:
+        audio = ffmpeg.extract_audio(media, tmp / f"piece-{tag}.mp3", start=start, duration=end - start)
+        with open(audio, "rb") as f:
+            try:
+                # No `language`: Whisper detects what is spoken in this piece and writes it down as said.
+                resp = self.client.audio.transcriptions.create(
+                    model=self.model, file=f, response_format="verbose_json", timestamp_granularities=["word", "segment"]
                 )
-                detected = detected or getattr(resp, "language", None)
-                for w in getattr(resp, "words", None) or []:
-                    text = (w.word if hasattr(w, "word") else w["word"]).strip()
-                    start = float(w.start if hasattr(w, "start") else w["start"])
-                    end = float(w.end if hasattr(w, "end") else w["end"])
-                    if text:
-                        words.append(Word(start + offset, end + offset, text))
-                # Whisper's word list has no punctuation; borrow it from the segments for better sentence splits.
-                _restore_punctuation(words, getattr(resp, "segments", None) or [], offset)
-                offset += chunk_len
-                idx += 1
-        return words, _lang_code(detected)
+            except Exception as e:  # SDK raises typed errors; surface a readable message
+                raise TranscriptionError(_friendly_openai_error(e, self.client.base_url)) from e
+        minutes = (end - start) / 60
+        record_usage("openai", "transcription", units=minutes, cost_usd=minutes * WHISPER_PRICE_PER_MIN)
+        words: list[Word] = []
+        for w in getattr(resp, "words", None) or []:
+            text = (w.word if hasattr(w, "word") else w["word"]).strip()
+            ws = float(w.start if hasattr(w, "start") else w["start"])
+            we = float(w.end if hasattr(w, "end") else w["end"])
+            if text:
+                words.append(Word(ws + start, we + start, text))
+        # Whisper's word list has no punctuation; borrow it from the segments for better sentence splits.
+        _restore_punctuation(words, getattr(resp, "segments", None) or [], start)
+        return words, Piece(end - start, getattr(resp, "language", None), " ".join(w.text for w in words))
+
+    def transcribe(self, media: Path, duration: float) -> tuple[list[Word], dict]:
+        levels = AudioLevels(media)
+        pieces = [p for p in plan_pieces(levels, max(duration, 1.0)) if not levels.silent(*p)]
+        with tempfile.TemporaryDirectory(prefix="vc-stt-") as tmp, ThreadPoolExecutor(PARALLEL_REQUESTS) as pool:
+            done = list(pool.map(lambda ip: self._piece(media, Path(tmp), str(ip[0]), *ip[1]), enumerate(pieces)))
+            results: list[list[tuple[list[Word], Piece]]] = [[r] for r in done]
+            # Not sure which language a piece is in? Listen closer before deciding: transcribe its two halves
+            # separately (each gets its own language detection) and keep that when it is clearer.
+            retried = 0
+            for i, ((a, b), (_words, piece)) in enumerate(zip(pieces, done, strict=True)):
+                if piece.certainty()[1] >= UNCERTAIN or b - a < 10:
+                    continue
+                mid = levels.quietest(a + 0.35 * (b - a), a + 0.65 * (b - a))
+                halves = [self._piece(media, Path(tmp), f"{i}a", a, mid), self._piece(media, Path(tmp), f"{i}b", mid, b)]
+                retried += 1
+                if min(h[1].certainty()[1] for h in halves) > piece.certainty()[1]:
+                    results[i] = halves
+        words = [w for r in results for ws, _ in r for w in ws]
+        report = language_report([p for r in results for _, p in r], "whisper-per-piece", translate_captions_requested())
+        report["pieces"] = len(pieces)
+        report["rechecked_pieces"] = retried
+        return words, report
 
 
 class FasterWhisperTranscriber:
@@ -124,24 +190,22 @@ class FasterWhisperTranscriber:
             self._model_cache[self.model_size] = WhisperModel(self.model_size, device="auto", compute_type="int8")
         return self._model_cache[self.model_size]
 
-    def transcribe(self, media: Path, language: str | None, duration: float) -> tuple[list[Word], str | None]:  # pragma: no cover
-        segments, info = self._model().transcribe(
-            str(media), language=language or None, word_timestamps=True, vad_filter=True
-        )
+    def transcribe(self, media: Path, duration: float) -> tuple[list[Word], dict]:  # pragma: no cover - heavy
+        # task="transcribe" (never "translate"), no forced language; `multilingual` re-detects the language
+        # for every 30 s window (faster-whisper >= 1.1), so mixed speech keeps its own language.
+        kwargs = {"language": None, "task": "transcribe", "word_timestamps": True, "vad_filter": True}
+        try:
+            segments, info = self._model().transcribe(str(media), multilingual=True, **kwargs)
+        except TypeError:
+            segments, info = self._model().transcribe(str(media), **kwargs)
         words: list[Word] = []
+        pieces: list[Piece] = []
         for seg in segments:
-            for w in seg.words or []:
-                if w.word.strip():
-                    words.append(Word(float(w.start), float(w.end), w.word.strip()))
-        return words, _lang_code(getattr(info, "language", None))
-
-
-def _lang_code(lang: str | None) -> str | None:
-    if not lang:
-        return None
-    lang = lang.lower()
-    names = {"dutch": "nl", "english": "en", "german": "de", "french": "fr", "flemish": "nl"}
-    return names.get(lang, lang[:2])
+            seg_words = [Word(float(w.start), float(w.end), w.word.strip()) for w in seg.words or [] if w.word.strip()]
+            words.extend(seg_words)
+            pieces.append(Piece(float(seg.end) - float(seg.start), getattr(info, "language", None),
+                                " ".join(w.text for w in seg_words), getattr(info, "language_probability", None)))
+        return words, language_report(pieces, "faster-whisper", translate_captions_requested())
 
 
 def _restore_punctuation(words: list[Word], segments, offset: float) -> None:

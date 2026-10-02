@@ -181,6 +181,8 @@ export interface Clip {
   status: string;
   caption_preset: string | null;
   captions_custom?: boolean;
+  /** Spoken language = caption language (captions are never translated). */
+  caption_language?: { caption_language: string | null; detected_language: string | null; translation_applied: boolean; confidence?: number; languages?: Record<string, number>; mixed?: boolean } | null;
   layout: string | null;
   video_url: string | null;
   thumbnail_url: string | null;

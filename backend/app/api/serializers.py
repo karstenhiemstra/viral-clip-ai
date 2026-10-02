@@ -88,10 +88,22 @@ def video_out(v: Video, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         "media_meta": v.media_meta or {},
         "has_transcript": v.transcript is not None and bool(v.transcript.words),
         "transcript_source": v.transcript.source if v.transcript else None,
+        "caption_language": _language_info(v.transcript),
         "discovered_at": iso(v.discovered_at),
         "analyzed_at": iso(v.analyzed_at),
         **(extra or {}),
     }
+
+
+def _language_info(tr) -> dict[str, Any] | None:
+    """Spoken language of the transcript = language of the captions (never translated)."""
+    if tr is None:
+        return None
+    info = dict(tr.language_info or {})
+    info.setdefault("caption_language", tr.language)
+    info.setdefault("detected_language", tr.language)
+    info["translation_applied"] = False
+    return info
 
 
 def clip_out(c: Clip, detail: bool = False) -> dict[str, Any]:
@@ -146,6 +158,7 @@ def clip_out(c: Clip, detail: bool = False) -> dict[str, Any]:
             signals=c.signals or {},
             score_breakdown=c.score_breakdown or {},
             render_meta=c.render_meta or {},
+            caption_language=_language_info(v.transcript if v else None),
             sources=c.tags or [],
             feedback=[{"rating": f.rating, "note": f.note, "created_at": iso(f.created_at)} for f in c.feedback],
             performance=[performance_out(p) for p in c.performance],

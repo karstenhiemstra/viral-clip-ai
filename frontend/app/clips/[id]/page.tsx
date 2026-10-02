@@ -26,6 +26,16 @@ import {
 } from "@/lib/format";
 import type { Clip } from "@/lib/types";
 
+const LANGUAGES: Record<string, string> = { nl: "Nederlands", en: "Engels", de: "Duits", fr: "Frans", es: "Spaans", it: "Italiaans", pt: "Portugees" };
+
+function languageLabel(info: NonNullable<Clip["caption_language"]>): string {
+  const name = (code: string) => LANGUAGES[code] ?? code.toUpperCase();
+  const main = name(info.caption_language ?? "");
+  const mixed = info.mixed && info.languages ? ` (gemengd: ${Object.entries(info.languages).filter(([, v]) => v >= 0.1).map(([k, v]) => `${name(k)} ${Math.round(v * 100)}%`).join(", ")})` : "";
+  const sure = info.confidence != null ? `, ${Math.round(info.confidence * 100)}% zeker` : "";
+  return `${main}${mixed} · niet vertaald${sure}`;
+}
+
 function Transcript({ clip }: { clip: Clip }) {
   const emph = new Set((clip.emphasis_words ?? []).map((w) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")));
   const words = clip.words ?? [];
@@ -313,6 +323,11 @@ export default function ClipDetailPage() {
                 <span className="flex flex-wrap items-center gap-2">
                   <Clock className="size-3" /> {formatTimestamp(clip.start_time)} – {formatTimestamp(clip.end_time)} · {formatDuration(clip.duration)}
                   {(clip.segments?.length ?? 0) > 1 && ` · ${clip.segments!.length - 1} stiltes eruit geknipt`}
+                  {clip.caption_language?.caption_language && (
+                    <span title="De captions zijn een transcriptie in de gesproken taal, niet vertaald">
+                      · Taal: {languageLabel(clip.caption_language)}
+                    </span>
+                  )}
                 </span>
               }
               action={
