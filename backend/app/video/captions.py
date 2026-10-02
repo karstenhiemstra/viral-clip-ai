@@ -7,10 +7,15 @@ Presets
 
 Captions are positioned from the reframing plan so they sit below faces (or above them for close-ups)
 and inside TikTok's safe zone (clear of the bottom UI and the right-hand buttons).
+
+The user can edit the captions of a clip: the automatic grouping is offered as a list of cues
+({start, end, text} in clip time, see ``auto_cues``), edited cues are stored on the clip and turned back
+into word groups for the same styles and animations (``cues_to_groups``).
 """
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -104,6 +109,15 @@ def group_words(words: list[CaptionWord], style: CaptionStyle) -> list[list[Capt
     return groups
 
 
+def _group_end(groups: list[list[CaptionWord]], gi: int) -> float:
+    """When a caption group disappears: hold briefly after the last word, never overlap the next group."""
+    group = groups[gi]
+    g_start, g_end = group[0].start, group[-1].end
+    nxt = groups[gi + 1][0].start if gi + 1 < len(groups) else g_end + 0.6
+    g_end = max(g_end, min(nxt, g_end + 0.35))
+    return max(g_end, g_start + 0.25)
+
+
 def caption_y(face_bottom_ratio: float | None, face_top_ratio: float | None, layout: str) -> int:
     """Vertical centre of the caption block in the 1080x1920 frame."""
     if layout == "split":
@@ -134,7 +148,10 @@ def build_ass(
     emphasis: list[str] | None = None,
     title: str | None = None,
     title_duration: float = 2.8,
+    groups: list[list[CaptionWord]] | None = None,
 ) -> str:
+    """``groups`` (from ``cues_to_groups``): captions edited by the user, shown exactly at their own times;
+    otherwise ``words`` are grouped automatically."""
     style = PRESETS.get(preset, PRESETS["bold_white"])
     emph = {normalize(e) for e in (emphasis or []) if e}
     border_style = 3 if style.box else 1
@@ -157,13 +174,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     events: list[str] = []
     pos = f"{{\\an5\\pos({PLAY_W // 2},{y})}}"
-    groups = group_words(words, style)
+    exact = groups is not None
+    if groups is None:
+        groups = group_words(words, style)
     for gi, group in enumerate(groups):
         g_start = group[0].start
-        g_end = group[-1].end
-        nxt = groups[gi + 1][0].start if gi + 1 < len(groups) else g_end + 0.6
-        g_end = max(g_end, min(nxt, g_end + 0.35))  # hold briefly, never overlap the next group
-        g_end = max(g_end, g_start + 0.25)
+        g_end = group[-1].end if exact else _group_end(groups, gi)
 
         def render(active: int | None, group: list[CaptionWord] = group) -> str:
             parts = []
@@ -194,3 +210,96 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         tpos = f"{{\\an5\\pos({PLAY_W // 2},{int(PLAY_H * 0.16)})\\fad(120,200)}}"
         events.append(f"Dialogue: 1,{_ts(0)},{_ts(title_duration)},Title,,0,0,0,,{tpos}{_escape(title[:70])}")
     return header + "\n".join(events) + "\n"
+
+
+# --- manual editing -----------------------------------------------------------------------------------
+
+MIN_CUE = 0.1  # seconds
+MAX_CUES = 500
+MAX_CUE_CHARS = 200
+
+
+class CaptionError(ValueError):
+    """Invalid edited captions (message is shown to the user)."""
+
+
+def auto_cues(words: list[CaptionWord], preset: str, duration: float | None = None) -> list[dict]:
+    """The automatic captions as editable cues [{start, end, text}] (clip time), timed like ``build_ass``
+    and kept inside the clip, so saving them unchanged is always valid."""
+    style = PRESETS.get(preset, PRESETS["dynamic"])
+    limit = duration if duration is not None else math.inf
+    groups: list[list[CaptionWord]] = []
+    for g in group_words(sorted((w for w in words if w.start < limit - MIN_CUE), key=lambda w: w.start), style):
+        if groups and g[0].start - groups[-1][0].start < MIN_CUE:  # two people at once: one caption
+            groups[-1] = groups[-1] + g
+        else:
+            groups.append(g)
+    cues: list[dict] = []
+    for gi, group in enumerate(groups):
+        start = group[0].start
+        end = _group_end(groups, gi)
+        if gi + 1 < len(groups):
+            end = min(end, groups[gi + 1][0].start)
+        end = min(max(end, start + MIN_CUE), limit)
+        cues.append({"start": round(start, 2), "end": round(end, 2), "text": " ".join(w.text for w in group)})
+    return cues
+
+
+def validate_cues(cues: list[dict], duration: float) -> list[dict]:
+    """Clean and check edited cues: text present, 0 <= start < end <= clip duration, no overlaps."""
+    if len(cues) > MAX_CUES:
+        raise CaptionError(f"Maximaal {MAX_CUES} captions per clip")
+    out = []
+    for c in cues:
+        text = " ".join(str(c.get("text") or "").split())
+        try:
+            start, end = float(c["start"]), float(c["end"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise CaptionError("Elke caption heeft een starttijd en een eindtijd nodig") from e
+        if not (math.isfinite(start) and math.isfinite(end)):
+            raise CaptionError("Ongeldige tijd")
+        out.append({"start": round(start, 3), "end": round(end, 3), "text": text})
+    out.sort(key=lambda c: (c["start"], c["end"]))
+    for i, c in enumerate(out, 1):
+        if not c["text"]:
+            raise CaptionError(f"Caption {i} is leeg: typ tekst of verwijder de caption")
+        if len(c["text"]) > MAX_CUE_CHARS:
+            raise CaptionError(f"Caption {i} is te lang (max. {MAX_CUE_CHARS} tekens): splits hem op")
+        if c["start"] < 0:
+            raise CaptionError(f"Caption {i} begint vóór het begin van de clip")
+        if c["end"] > duration + 0.05:
+            raise CaptionError(f"Caption {i} eindigt na het einde van de clip ({duration:.1f} s)")
+        if c["end"] - c["start"] < MIN_CUE - 1e-6:
+            raise CaptionError(f"Caption {i}: de eindtijd moet na de starttijd liggen")
+    for i in range(1, len(out)):
+        prev, cur = out[i - 1], out[i]
+        if prev["end"] > cur["start"]:
+            if prev["end"] - cur["start"] > 0.15 or cur["start"] - prev["start"] < MIN_CUE - 1e-6:
+                raise CaptionError(f"Caption {i} en {i + 1} overlappen: laat {i} eindigen vóór {i + 1} begint")
+            prev["end"] = cur["start"]  # a hair of overlap (rounding): trim silently
+    return out
+
+
+def cues_to_groups(cues: list[dict], words: list[CaptionWord]) -> list[list[CaptionWord]]:
+    """Edited cues -> word groups for ``build_ass``. Each cue becomes one caption shown from its start to its
+    end. Its words keep their spoken timing when the cue still has as many words as were spoken in it (e.g. a
+    spelling fix), so the karaoke highlight stays in sync; otherwise the cue's time is shared by word length."""
+    groups: list[list[CaptionWord]] = []
+    for cue in cues:
+        tokens = str(cue.get("text") or "").split()
+        s, e = float(cue["start"]), float(cue["end"])
+        if not tokens or e <= s:
+            continue
+        spoken = [w for w in words if s - 0.05 <= (w.start + w.end) / 2 <= e + 0.05]
+        if len(spoken) == len(tokens):
+            group = [CaptionWord(min(max(w.start, s), e), min(max(w.end, s), e), t) for w, t in zip(spoken, tokens, strict=True)]
+        else:
+            total = sum(len(t) + 1 for t in tokens)
+            group, t0 = [], s
+            for tok in tokens:
+                d = (e - s) * (len(tok) + 1) / total
+                group.append(CaptionWord(t0, t0 + d, tok))
+                t0 += d
+        group[0].start, group[-1].end = s, e
+        groups.append(group)
+    return groups

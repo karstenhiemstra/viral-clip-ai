@@ -241,6 +241,8 @@ class Clip(Base):
 
     status: Mapped[str] = mapped_column(String(24), default=ClipStatus.PENDING_RENDER, index=True)
     caption_preset: Mapped[str | None] = mapped_column(String(32))
+    # Captions edited by the user: [{"start", "end", "text"}] in clip time. None = automatic from the words.
+    captions: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONType, nullable=True, default=None)
     layout: Mapped[str | None] = mapped_column(String(32))
     render_key: Mapped[str | None] = mapped_column(String(500))
     thumbnail_key: Mapped[str | None] = mapped_column(String(500))

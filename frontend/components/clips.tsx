@@ -177,11 +177,12 @@ export function FeedbackButtons({ clip, onChange, compact }: { clip: Clip; onCha
   );
 }
 
-export function ClipPlayer({ clip }: { clip: Clip }) {
-  if (clip.video_url) {
+export function ClipPlayer({ clip, src, videoRef }: { clip: Clip; src?: string | null; videoRef?: React.Ref<HTMLVideoElement> }) {
+  const url = src || clip.video_url;
+  if (url) {
     return (
       <div className="mx-auto aspect-[9/16] w-full max-w-[360px] overflow-hidden rounded-2xl border border-line bg-black">
-        <video key={clip.video_url} src={clip.video_url} poster={clip.thumbnail_url ?? undefined} className="size-full" controls playsInline preload="metadata" />
+        <video ref={videoRef} key={url} src={url} poster={src ? undefined : (clip.thumbnail_url ?? undefined)} className="size-full" controls playsInline preload="metadata" />
       </div>
     );
   }

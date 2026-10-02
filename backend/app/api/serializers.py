@@ -126,6 +126,7 @@ def clip_out(c: Clip, detail: bool = False) -> dict[str, Any]:
         "stage_scores": c.stage_scores or {},
         "status": c.status,
         "caption_preset": c.caption_preset,
+        "captions_custom": c.captions is not None,
         "layout": c.layout,
         "video_url": media_url(c.render_key, c.updated_at),
         "thumbnail_url": media_url(c.thumbnail_key, c.updated_at),

@@ -9,11 +9,17 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.serializers import clip_out, performance_out, slugify
+from app.ai.pipeline import media_path
+from app.api.serializers import clip_out, media_url, performance_out, slugify
+from app.config import get_settings
 from app.db import get_db
 from app.models import Clip, ClipFeedback, ClipPerformance, ClipStatus, JobType, Rating, utcnow
 from app.services import queue
+from app.services.settings_store import load_settings
 from app.services.storage import get_storage
+from app.video import ffmpeg
+from app.video.captions import MAX_CUE_CHARS, MAX_CUES, CaptionError, auto_cues, validate_cues
+from app.video.render import output_words, plan_from_meta, render_clip
 from app.worker.tasks import rebuild_clip_window
 
 router = APIRouter(prefix="/api/clips", tags=["clips"])
@@ -32,6 +38,16 @@ class ClipUpdate(BaseModel):
     title: str | None = Field(None, max_length=300)
     published: bool | None = None
     published_url: str | None = Field(None, max_length=500)
+
+
+class CueIn(BaseModel):
+    start: float
+    end: float
+    text: str = Field("", max_length=MAX_CUE_CHARS + 50)
+
+
+class CaptionsIn(BaseModel):
+    captions: list[CueIn] | None = Field(None, max_length=MAX_CUES)  # None = back to automatic captions
 
 
 class PerformanceIn(BaseModel):
@@ -143,6 +159,7 @@ def update_clip(clip_id: int, body: ClipUpdate, db: Session = Depends(get_db)):
         if end - start < 2 or end - start > 180:
             raise HTTPException(status_code=422, detail="Clipduur moet tussen 2 en 180 seconden liggen")
         rebuild_clip_window(db, clip, start, end)
+        clip.captions = None  # edited caption times belong to the old start/end
         rerender = True
     for k in ("caption_preset", "layout"):
         if k in data and data[k] != getattr(clip, k):
@@ -166,6 +183,85 @@ def render(clip_id: int, db: Session = Depends(get_db)):
     job = queue.enqueue(db, JobType.RENDER_CLIP, clip_id=clip.id, video_id=clip.video_id, priority=95,
                         title=f"Renderen: {clip.title or clip.id}"[:300])
     return {"job_id": job.id}
+
+
+def _preset(db: Session, clip: Clip) -> str:
+    return clip.caption_preset or load_settings(db).clips.caption_preset
+
+
+def _captions_out(db: Session, clip: Clip) -> dict:
+    preset = _preset(db, clip)
+    custom = clip.captions is not None
+    if custom:
+        cues = clip.captions
+    else:
+        segments = [(float(a), float(b)) for a, b in (clip.segments or [[clip.start_time, clip.end_time]])]
+        words = [(float(w[0]), float(w[1]), str(w[2])) for w in clip.words or []]
+        cues = auto_cues(output_words(words, segments), preset, clip.duration)
+    return {"custom": custom, "captions": cues, "duration": clip.duration, "caption_preset": preset}
+
+
+def _validated(body: CaptionsIn, clip: Clip) -> list[dict] | None:
+    if body.captions is None:
+        return None
+    try:
+        return validate_cues([c.model_dump() for c in body.captions], clip.duration)
+    except CaptionError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@router.get("/{clip_id}/captions")
+def get_captions(clip_id: int, db: Session = Depends(get_db)):
+    """The clip's captions as editable cues (clip time): the edited ones, or the automatic ones."""
+    return _captions_out(db, _get(db, clip_id))
+
+
+@router.put("/{clip_id}/captions")
+def save_captions(clip_id: int, body: CaptionsIn, db: Session = Depends(get_db)):
+    """Store edited captions (``captions: null`` = back to automatic). The MP4 changes on the next render."""
+    clip = _get(db, clip_id)
+    clip.captions = _validated(body, clip)
+    db.commit()
+    return _captions_out(db, clip)
+
+
+@router.post("/{clip_id}/captions/preview")
+def preview_captions(clip_id: int, body: CaptionsIn, db: Session = Depends(get_db)):
+    """Quick preview MP4 with these captions: reuses the crop of the last render (no new tracking or AI)
+    and a fast, lower-quality encode. The clip itself is not changed."""
+    import shutil
+    import uuid
+
+    clip = _get(db, clip_id)
+    media = media_path(clip.video) if clip.video else None
+    if media is None:
+        raise HTTPException(status_code=409, detail="Het bronbestand ontbreekt: lever eerst de video aan")
+    cues = _validated(body, clip)
+    rs = load_settings(db)
+    info = ffmpeg.probe(media)
+    plan = plan_from_meta(clip.render_meta, info) if clip.status == ClipStatus.READY else None
+    tmp = get_settings().tmp_dir / f"caption-preview-{clip.id}-{uuid.uuid4().hex[:8]}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        result = render_clip(
+            media, info,
+            [(float(a), float(b)) for a, b in (clip.segments or [[clip.start_time, clip.end_time]])],
+            [(float(w[0]), float(w[1]), str(w[2])) for w in clip.words or []],
+            tmp / "preview.mp4", tmp / "preview.jpg",
+            caption_preset=_preset(db, clip), layout=clip.layout or rs.clips.layout, emphasis=clip.emphasis_words,
+            title=clip.title if rs.clips.add_hook_title else None,
+            captions=cues, plan=plan, fast=True,
+        )
+        key = get_storage().put_file(_preview_key(clip), result.video, "video/mp4")
+    except ffmpeg.FFmpegError as e:
+        raise HTTPException(status_code=500, detail=f"Preview maken mislukt: {e}") from e
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return {"preview_url": media_url(key, utcnow())}
+
+
+def _preview_key(clip: Clip) -> str:
+    return f"clips/{clip.id}/caption-preview.mp4"
 
 
 @router.get("/{clip_id}/download")
@@ -209,7 +305,7 @@ def list_performance(clip_id: int, db: Session = Depends(get_db)):
 def delete_clip(clip_id: int, db: Session = Depends(get_db)):
     clip = _get(db, clip_id)
     storage = get_storage()
-    for key in (clip.render_key, clip.thumbnail_key):
+    for key in (clip.render_key, clip.thumbnail_key, _preview_key(clip)):
         if key:
             try:
                 storage.delete(key)

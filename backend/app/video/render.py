@@ -11,7 +11,7 @@ from typing import Any
 from app.ai.boundaries import map_to_output_time
 from app.config import get_settings
 from app.video import ffmpeg
-from app.video.captions import CaptionWord, build_ass, caption_y
+from app.video.captions import CaptionWord, build_ass, caption_y, cues_to_groups
 from app.video.reframe import CropPlan, plan_crop
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,35 @@ def _video_chain(plan: CropPlan, fps: int) -> str:
     )
 
 
+def output_words(words: list[tuple[float, float, str]], segments: list[tuple[float, float]]) -> list[CaptionWord]:
+    """Source-time words -> caption words in clip time (after dead-air removal)."""
+    out = []
+    for s, e, t in words:
+        os_ = map_to_output_time(segments, s)
+        oe = map_to_output_time(segments, e)
+        if oe - os_ < 0.02:
+            oe = os_ + 0.12
+        out.append(CaptionWord(os_, oe, t))
+    return out
+
+
+def plan_from_meta(meta: dict[str, Any] | None, info: ffmpeg.MediaInfo) -> CropPlan | None:
+    """The crop plan of the last render (from ``render_meta``), so a caption preview needs no new tracking."""
+    crop = (meta or {}).get("crop")
+    if not crop or not crop.get("layout"):
+        return None
+    if crop["layout"] == "audio" or not info.has_video:
+        return CropPlan("audio", OUT_W, OUT_H, OUT_W, OUT_H)
+    src_w, src_h = info.display_size or (1920, 1080)
+    return CropPlan(
+        crop["layout"], src_w, src_h, int(crop["crop_w"]), int(crop["crop_h"]),
+        keyframes=[tuple(k) for k in crop.get("keyframes") or []],
+        split_boxes=[tuple(b) for b in crop.get("split_boxes") or []],
+        face_top_ratio=crop.get("face_top_ratio"), face_bottom_ratio=crop.get("face_bottom_ratio"),
+        detector=crop.get("detector") or "none",
+    )
+
+
 def render_clip(
     media: Path,
     info: ffmpeg.MediaInfo,
@@ -69,14 +98,20 @@ def render_clip(
     emphasis: list[str] | None = None,
     title: str | None = None,
     scene_cuts: list[float] | None = None,
+    captions: list[dict] | None = None,
+    plan: CropPlan | None = None,
+    fast: bool = False,
 ) -> RenderResult:
+    """``captions``: cues edited by the user (None = automatic captions from ``words``). ``plan``: reuse a
+    crop plan instead of tracking again. ``fast``: quick low-quality encode (caption preview)."""
     if not segments:
         raise ValueError("Geen segmenten om te renderen")
     base = segments[0][0]
     span_end = segments[-1][1]
-    plan = plan_crop(media, info, segments, layout=layout, scene_cuts=scene_cuts, words=words) if layout != "audio" else CropPlan(
-        "audio", OUT_W, OUT_H, OUT_W, OUT_H
-    )
+    if plan is None:
+        plan = plan_crop(media, info, segments, layout=layout, scene_cuts=scene_cuts, words=words) if layout != "audio" else CropPlan(
+            "audio", OUT_W, OUT_H, OUT_W, OUT_H
+        )
     fps = int(round(min(60.0, info.fps or 30.0))) or 30
     out_duration = sum(b - a for a, b in segments)
 
@@ -115,16 +150,11 @@ def render_clip(
 
         # captions
         v_out = "[vl]"
-        if caption_preset != "none" and words:
-            cap_words = []
-            for s, e, t in words:
-                os_ = map_to_output_time(segments, s)
-                oe = map_to_output_time(segments, e)
-                if oe - os_ < 0.02:
-                    oe = os_ + 0.12
-                cap_words.append(CaptionWord(os_, oe, t))
+        if caption_preset != "none" and (words or captions is not None):
+            cap_words = output_words(words, segments)
+            groups = cues_to_groups(captions, cap_words) if captions is not None else None
             y = caption_y(plan.face_bottom_ratio, plan.face_top_ratio, plan.layout)
-            ass_text = build_ass(cap_words, caption_preset, y=y, emphasis=emphasis, title=title)
+            ass_text = build_ass(cap_words, caption_preset, y=y, emphasis=emphasis, title=title, groups=groups)
             ass_path = tmpdir / "captions.ass"
             ass_path.write_text(ass_text, encoding="utf-8")
             fonts_dir = get_settings().fonts_dir
@@ -144,7 +174,8 @@ def render_clip(
             "-ss", f"{base:.3f}", "-t", f"{span_end - base + 0.05:.3f}", "-i", str(media),
             "-filter_complex", ";".join(graph),
             "-map", v_out, "-map", "[aout]",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-profile:v", "high", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast" if fast else "veryfast", "-crf", "28" if fast else "20",
+            "-profile:v", "high", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "160k", "-ar", "48000",
             "-movflags", "+faststart",
             "-t", f"{out_duration:.3f}",

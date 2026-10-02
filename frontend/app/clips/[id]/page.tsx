@@ -1,10 +1,11 @@
 "use client";
 
-import { ArrowLeft, Clock, Copy, Download, ExternalLink, Minus, Plus, RefreshCw, Save, TrendingUp } from "lucide-react";
+import { ArrowLeft, Captions, Clock, Copy, Download, ExternalLink, Minus, Plus, RefreshCw, Save, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
+import { CaptionEditor } from "@/components/captions";
 import { ClipPlayer, FeedbackButtons, ScoreBadge, ScoreBars } from "@/components/clips";
 import { errorText, useToast } from "@/components/toast";
 import { Badge, Button, Card, CardHeader, cx, Field, Input, Select, Spinner } from "@/components/ui";
@@ -102,6 +103,9 @@ export default function ClipDetailPage() {
   });
   const [trim, setTrim] = useState<{ start: number; end: number } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [editingCaptions, setEditingCaptions] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   if (!clip) return <div className="flex justify-center py-24"><Spinner /></div>;
   const st = CLIP_STATUS[clip.status];
@@ -148,7 +152,13 @@ export default function ClipDetailPage() {
       <div className="grid gap-8 lg:grid-cols-[minmax(0,400px)_minmax(0,1fr)]">
         {/* left: player + actions */}
         <div className="space-y-4">
-          <ClipPlayer clip={clip} />
+          {previewUrl && (
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-fire/30 bg-fire/10 px-3 py-2 text-xs text-ink-2">
+              <span>Preview met je aangepaste captions (nog niet de download)</span>
+              <Button size="sm" variant="ghost" onClick={() => setPreviewUrl(null)}>Terug naar clip</Button>
+            </div>
+          )}
+          <ClipPlayer clip={clip} src={previewUrl} videoRef={videoRef} />
           {clip.download_url ? (
             <a href={clip.download_url} className="fire-gradient flex h-12 items-center justify-center gap-2 rounded-xl text-sm font-semibold text-white shadow-[0_10px_30px_-10px_rgba(255,80,50,0.8)] transition hover:brightness-110">
               <Download className="size-4" /> Download Clip
@@ -170,12 +180,26 @@ export default function ClipDetailPage() {
               Opnieuw renderen
             </Button>
           )}
+          {clip.video_url && !editingCaptions && (
+            <Button className="w-full" variant="secondary" icon={<Captions className="size-4" />} onClick={() => setEditingCaptions(true)}>
+              Captions aanpassen
+            </Button>
+          )}
+          {editingCaptions && (
+            <CaptionEditor
+              clip={clip}
+              videoRef={videoRef}
+              onPreview={setPreviewUrl}
+              onRendered={() => { setPreviewUrl(null); mutate(); }}
+              onClose={() => { setEditingCaptions(false); setPreviewUrl(null); }}
+            />
+          )}
           <FeedbackButtons clip={clip} onChange={(c) => mutate(c, { revalidate: false })} />
 
           <Card className="space-y-4 p-4">
             <p className="text-xs font-semibold text-ink-2">Bewerken & opnieuw renderen</p>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Captions">
+              <Field label="Captions" hint={clip.captions_custom ? "Met je eigen aangepaste captions" : undefined}>
                 <Select className="w-full" value={clip.caption_preset ?? "dynamic"} onChange={(e) => patch({ caption_preset: e.target.value }, "Captions aangepast — clip wordt opnieuw gerenderd")}>
                   {Object.entries(PRESET_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </Select>
@@ -198,6 +222,9 @@ export default function ClipDetailPage() {
                 </div>
               ))}
             </div>
+            {trim && clip.captions_custom && (
+              <p className="text-[11px] text-warn">Let op: bij nieuwe start/einde worden je aangepaste captions teruggezet naar automatisch.</p>
+            )}
             {trim && (
               <Button variant="primary" className="w-full" loading={saving} icon={<RefreshCw className="size-4" />} onClick={() => patch({ start_time: trim.start, end_time: trim.end }, "Nieuwe grenzen opgeslagen — clip wordt opnieuw gerenderd")}>
                 Toepassen ({(end - start).toFixed(1)}s)

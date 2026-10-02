@@ -245,6 +245,7 @@ def handle_render_clip(ctx: JobContext) -> str:
                 emphasis=clip.emphasis_words,
                 title=clip.title if rs.clips.add_hook_title else None,
                 scene_cuts=cuts,
+                captions=clip.captions,
             )
             ctx.progress(90, "render", "Opslaan")
             storage = get_storage()

@@ -141,6 +141,20 @@ export interface Performance {
   recorded_at: string | null;
 }
 
+/** One caption of a clip, in clip time (seconds). */
+export interface CaptionCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface ClipCaptions {
+  custom: boolean;
+  captions: CaptionCue[];
+  duration: number;
+  caption_preset: string;
+}
+
 export interface Clip {
   id: number;
   video_id: number;
@@ -166,6 +180,7 @@ export interface Clip {
   stage_scores: Record<string, number>;
   status: string;
   caption_preset: string | null;
+  captions_custom?: boolean;
   layout: string | null;
   video_url: string | null;
   thumbnail_url: string | null;
