@@ -271,3 +271,25 @@ def test_video_without_transcription_key_waits_and_resumes(client, db, test_vide
     client.post(f"/api/videos/{vid}/transcript", files={"file": ("t.srt", io.BytesIO(srt.encode()), "text/plain")})
     Worker("e2e").drain()
     assert client.get(f"/api/videos/{vid}").json()["status"] == VideoStatus.ANALYZED
+
+
+def test_wrong_database_password_is_explained(monkeypatch):
+    """Docker: an existing database with another POSTGRES_PASSWORD than .env -> a plain explanation."""
+    import pytest
+    from sqlalchemy.exc import OperationalError
+
+    import app.migrate as migrate
+
+    class Engine:
+        def connect(self):
+            raise OperationalError("SELECT 1", {}, Exception('FATAL:  password authentication failed for user "viralclip"'))
+
+    monkeypatch.setattr("app.db.get_engine", lambda: Engine())
+    with pytest.raises(migrate.DatabaseConfigError, match="POSTGRES_PASSWORD"):
+        migrate.wait_for_database(timeout=1)
+
+
+def test_database_check_passes_on_a_working_database(db):
+    from app.migrate import wait_for_database
+
+    wait_for_database(timeout=1)

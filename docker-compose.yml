@@ -30,8 +30,29 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-viralclip}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # An existing database keeps the password it was created with, so a new or changed .env (or starting
+    # from another folder) would lock the API out ("password authentication failed" -> "api is
+    # unhealthy"). On every start, set the password to POSTGRES_PASSWORD over the container's own local
+    # socket; the database stays password-protected on the network and is never published to the host.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /tmp/viralclip-password-synced
+        docker-entrypoint.sh postgres &
+        pid=$$!
+        trap 'kill -INT $$pid' INT
+        trap 'kill -TERM $$pid' TERM
+        until echo "ALTER ROLE CURRENT_USER WITH PASSWORD :'pw';" | psql -q -v ON_ERROR_STOP=1 -v pw="$$POSTGRES_PASSWORD" -U "$$POSTGRES_USER" -d postgres >/dev/null 2>&1; do
+          kill -0 $$pid 2>/dev/null || exit 1
+          sleep 1
+        done
+        touch /tmp/viralclip-password-synced
+        status=0
+        while kill -0 $$pid 2>/dev/null; do wait $$pid; status=$$?; done
+        exit $$status
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-viralclip}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-viralclip} && test -f /tmp/viralclip-password-synced"]
       interval: 5s
       timeout: 5s
       retries: 20

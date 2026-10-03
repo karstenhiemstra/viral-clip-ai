@@ -370,6 +370,7 @@ Meer rekenkracht: `docker compose up -d --scale worker=3` (de queue gebruikt `SK
 | *"ffmpeg is niet gevonden"* | Gebruik Docker, of installeer ffmpeg (`brew install ffmpeg` / `apt install ffmpeg`). |
 | Clips zijn matig | Zonder AI-key draait de basisanalyse. Stel een OpenAI-key in en geef feedback (het persoonlijke model start vanaf 12 beoordelingen). |
 | Reframing volgt het gezicht niet goed | Kies per clip *Volg spreker*, *Midden crop* of *Blur-fit* en render opnieuw. |
+| *"api is unhealthy"* / *"dependency failed to start"* | Start de app vanuit je **oorspronkelijke map** (waar je `.env` en `data/` staan). Het database-wachtwoord uit `.env` wordt bij elke start automatisch overgenomen. Details: `docker compose logs api`. |
 | Start-script blijft wachten / foutmelding | Staat Docker Desktop aan (*Engine running*)? Start het script opnieuw. Details: `docker compose logs --tail 50`. |
 | Jobs blijven hangen | `docker compose logs -f worker`. Vastgelopen jobs worden na 30 min opnieuw ingepland; retry/annuleer op de Queue-pagina. |
 | Mac: *"start-mac.command kan niet worden geopend"* | Rechtsklik → **Open** → **Open**. Of open Terminal in de map en typ `bash start-mac.command`. |

@@ -80,3 +80,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose build
+      - name: Full stack starts (db, api, worker, web)
+        run: |
+          printf 'POSTGRES_PASSWORD=first-%s\nAPP_SECRET_KEY=ci\n' "$RANDOM" > .env
+          docker compose up -d --wait --wait-timeout 240 db api web
+          docker compose up -d worker
+          curl -fsS http://127.0.0.1:8000/api/health
+          curl -fsS -o /dev/null http://127.0.0.1:3000/
+      - name: Still starts when .env has another database password than the existing database
+        run: |
+          printf 'POSTGRES_PASSWORD=second-%s\nAPP_SECRET_KEY=ci\n' "$RANDOM" > .env
+          docker compose up -d --wait --wait-timeout 240 db api web
+          curl -fsS http://127.0.0.1:8000/api/health
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail 200
