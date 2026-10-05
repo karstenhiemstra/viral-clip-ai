@@ -235,7 +235,7 @@ class Clip(Base):
     flags: Mapped[list[str]] = mapped_column(JSONType, default=list)
 
     viral_score: Mapped[float] = mapped_column(Float, index=True)
-    scores: Mapped[dict[str, float]] = mapped_column(JSONType, default=dict)  # 12 dimensions
+    scores: Mapped[dict[str, float]] = mapped_column(JSONType, default=dict)  # dimension scores (scoring.DIMENSIONS)
     stage_scores: Mapped[dict[str, float]] = mapped_column(JSONType, default=dict)  # stop/hold/engage
     signals: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
     features: Mapped[dict[str, float]] = mapped_column(JSONType, default=dict)

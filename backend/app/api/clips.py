@@ -18,7 +18,14 @@ from app.services import queue
 from app.services.settings_store import load_settings
 from app.services.storage import get_storage
 from app.video import ffmpeg
-from app.video.captions import MAX_CUE_CHARS, MAX_CUES, CaptionError, auto_cues, validate_cues
+from app.video.captions import (
+    MAX_CUE_CHARS,
+    MAX_CUES,
+    CaptionError,
+    auto_cues,
+    caption_preset_for,
+    validate_cues,
+)
 from app.video.render import output_words, plan_from_meta, render_clip
 from app.worker.tasks import rebuild_clip_window
 
@@ -197,7 +204,8 @@ def _captions_out(db: Session, clip: Clip) -> dict:
     else:
         segments = [(float(a), float(b)) for a, b in (clip.segments or [[clip.start_time, clip.end_time]])]
         words = [(float(w[0]), float(w[1]), str(w[2])) for w in clip.words or []]
-        cues = auto_cues(output_words(words, segments), preset, clip.duration)
+        layout = clip.layout or load_settings(db).clips.layout
+        cues = auto_cues(output_words(words, segments), caption_preset_for(preset, layout), clip.duration)
     return {"custom": custom, "captions": cues, "duration": clip.duration, "caption_preset": preset}
 
 

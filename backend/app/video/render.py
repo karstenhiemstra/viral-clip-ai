@@ -11,7 +11,14 @@ from typing import Any
 from app.ai.boundaries import map_to_output_time
 from app.config import get_settings
 from app.video import ffmpeg
-from app.video.captions import CaptionWord, build_ass, caption_y, cues_to_groups
+from app.video.captions import (
+    CaptionWord,
+    blurred_positions,
+    build_ass,
+    caption_preset_for,
+    caption_y,
+    cues_to_groups,
+)
 from app.video.reframe import CropPlan, plan_crop
 
 log = logging.getLogger(__name__)
@@ -54,6 +61,13 @@ def _video_chain(plan: CropPlan, fps: int) -> str:
         f"[vc]crop=w={plan.crop_w}:h={plan.crop_h}:x='{x}':y=0,"
         f"scale={OUT_W}:{OUT_H}:flags=lanczos,{tail}[vl]"
     )
+
+
+def _fg_height(plan: CropPlan) -> int:
+    """Height of the sharp, full-width video in the Blurred layout."""
+    if not plan.src_w or not plan.src_h:
+        return OUT_H
+    return min(OUT_H, int(round(OUT_W * plan.src_h / plan.src_w / 2)) * 2)
 
 
 def output_words(words: list[tuple[float, float, str]], segments: list[tuple[float, float]]) -> list[CaptionWord]:
@@ -112,6 +126,9 @@ def render_clip(
         plan = plan_crop(media, info, segments, layout=layout, scene_cuts=scene_cuts, words=words) if layout != "audio" else CropPlan(
             "audio", OUT_W, OUT_H, OUT_W, OUT_H
         )
+    # "Blurred achtergrond": the whole video sharp in the middle, captions as a label in the band above it.
+    blurred = layout == "fit_blur" and plan.layout == "fit_blur"
+    style_key = caption_preset_for(caption_preset, "fit_blur" if blurred else None)
     fps = int(round(min(60.0, info.fps or 30.0))) or 30
     out_duration = sum(b - a for a, b in segments)
 
@@ -150,21 +167,25 @@ def render_clip(
 
         # captions
         v_out = "[vl]"
+        fonts_dir = get_settings().fonts_dir
+        fonts_opt = f":fontsdir={ffmpeg.escape_filter_path(fonts_dir)}" if fonts_dir.exists() and any(fonts_dir.iterdir()) else ""
         if caption_preset != "none" and (words or captions is not None):
             cap_words = output_words(words, segments)
             groups = cues_to_groups(captions, cap_words) if captions is not None else None
             y = caption_y(plan.face_bottom_ratio, plan.face_top_ratio, plan.layout)
-            ass_text = build_ass(cap_words, caption_preset, y=y, emphasis=emphasis, title=title, groups=groups)
+            title_y = None
+            if blurred:  # captions (and the hook title) in the upper blurred band, see captions.LABEL
+                y, title_y = blurred_positions(_fg_height(plan))
+            ass_text = build_ass(cap_words, style_key, y=y, emphasis=emphasis, title=title, groups=groups, title_y=title_y)
             ass_path = tmpdir / "captions.ass"
             ass_path.write_text(ass_text, encoding="utf-8")
-            fonts_dir = get_settings().fonts_dir
-            fonts_opt = f":fontsdir={ffmpeg.escape_filter_path(fonts_dir)}" if fonts_dir.exists() and any(fonts_dir.iterdir()) else ""
             graph.append(f"[vl]ass=filename={ffmpeg.escape_filter_path(ass_path)}{fonts_opt}[vout]")
             v_out = "[vout]"
         elif title:
             ass_path = tmpdir / "title.ass"
-            ass_path.write_text(build_ass([], "capcut", y=0, title=title), encoding="utf-8")
-            graph.append(f"[vl]ass=filename={ffmpeg.escape_filter_path(ass_path)}[vout]")
+            title_y = blurred_positions(_fg_height(plan))[1] if blurred else None
+            ass_path.write_text(build_ass([], "label" if blurred else "capcut", y=0, title=title, title_y=title_y), encoding="utf-8")
+            graph.append(f"[vl]ass=filename={ffmpeg.escape_filter_path(ass_path)}{fonts_opt if blurred else ''}[vout]")
             v_out = "[vout]"
         graph.append("[ac]loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]")
 

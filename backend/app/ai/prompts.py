@@ -22,7 +22,7 @@ CATEGORIES = (
 )
 FLAGS = (
     "needs_context", "inside_joke", "starts_mid_sentence", "ends_mid_sentence", "weak_payoff", "sponsor_or_ad",
-    "intro_or_outro", "low_energy", "repetitive", "sensitive",
+    "intro_or_outro", "low_energy", "repetitive", "sensitive", "ends_before_payoff", "no_climax", "starts_mid_story",
 )
 VERDICTS = ("skip", "maybe", "good", "great")
 LANGUAGE_NAMES = {"nl": "Dutch (Nederlands)", "en": "English", "de": "German", "fr": "French", "be": "Dutch (Flemish)"}
@@ -46,6 +46,13 @@ WHAT MAKES A MOMENT WORK - judge it as someone scrolling TikTok with zero contex
 - Understandable without the rest of the video (a short setup sentence may be included).
 - Emotion: laughter, anger, shock, excitement, awkwardness, sincerity or vulnerability.
 - Discussion or share value: hot takes, controversial opinions, relatable situations, "send this to a friend" moments, quotable one-liners.
+
+EVERY CLIP IS A COMPLETE MINI STORY
+build-up -> tension/context -> CLIMAX/PAYOFF -> (short reaction). The climax can be a punchline, a surprising statement, a reaction, a reveal, an event, the peak of a conflict, an emotional moment, a twist or a visual event (people screaming, laughing, a fail).
+- Find the climax first, then choose the span around it: start early enough that a stranger understands what is going on (include the setup sentence; start a few seconds earlier when the clip would otherwise start mid-story), end AT the climax or shortly after it (the reaction of the people present may stay in).
+- Look ahead: the first interesting line is often only the set-up. Read the sentences after it - the punchline, the answer, the reveal or the big reaction often comes a few seconds later. Never end before it: a clip that stops just before the payoff is a failure (a cliffhanger without payoff).
+- If several people react, keep their reactions until the peak of the reaction, then cut.
+- Length: a complete story beats an exact length. 17 seconds with the payoff is better than 14 seconds that stops before it, but do not add anything after the reaction.
 
 AVOID
 - Intros, greetings, "today we are going to...", sponsor reads, merch, outros and calls to subscribe.
@@ -114,7 +121,7 @@ def candidate_user_prompt(
 ) -> str:
     lines = [
         f'VIDEO: "{title}" by {creator or "unknown creator"} (total length {fmt_ts(duration)}).',
-        f"Target clip length: {min_seconds:g}-{max_seconds:g} seconds (short is good as long as hook and payoff fit).",
+        f"Target clip length: {min_seconds:g}-{max_seconds:g} seconds (short is good as long as the build-up and the payoff fit; a few seconds longer is fine to complete the story).",
         f"Output language for description and reason: {language_name(output_language)}.",
     ]
     if chunk:
@@ -160,11 +167,16 @@ scores: every dimension from 0 to 100. Be strict and calibrated:
   comment_potential: does it invite opinions, debate, "who else...", disagreement or answers?
   retention: is there a reason to keep watching until the end (tension, build-up, anticipated payoff)? Dragging or repetitive parts score low.
   context: is it fully understandable without the rest of the video? Unknown references or "that thing from earlier" score low.
-  payoff: does the clip deliver within its length (punchline, reveal, reaction, answer)? Ending before the payoff scores below 30.
+  payoff: does the clip deliver its climax within its length (punchline, reveal, reaction, answer, twist)? Ending before the payoff scores below 30.
   rewatch: is there a reason to watch it again (fast punchline, hidden detail, quotable line, satisfying loop)?
-flags: only the ones that apply - needs_context, inside_joke, starts_mid_sentence, ends_mid_sentence, weak_payoff, sponsor_or_ad, intro_or_outro, low_energy, repetitive, sensitive.
+  buildup: is there a clear build-up towards the climax (setup, rising tension, anticipation)? A clip that starts at or after the climax scores low.
+  ending: how strong is the last moment? Ending on the climax or right after the reaction is 80+. Ending before the climax, on filler, or mid-thought scores below 30.
+  standalone: does it work as a complete mini story on its own (beginning, climax, conclusion), for someone who never saw the video?
+THE STORY ARC: a good clip is build-up -> tension/context -> CLIMAX/PAYOFF -> (short reaction). The climax can be a punchline, surprising statement, reaction, reveal, event, conflict peak, emotional moment, twist or visual event.
+climax_sentence: the id of the sentence where the climax/payoff happens (it may be in CONTEXT AFTER or CONTEXT BEFORE). Look ahead: the first interesting line is often only the set-up; check the CONTEXT AFTER sentences for the punchline, answer, reveal or big reaction that follows it. -1 only if there is no climax at all.
+flags: only the ones that apply - needs_context, inside_joke, starts_mid_sentence, ends_mid_sentence, weak_payoff, sponsor_or_ad, intro_or_outro, low_energy, repetitive, sensitive, ends_before_payoff (the climax or reaction happens after the clip as shown), no_climax (nothing pays off), starts_mid_story (opens in the middle of a story a stranger cannot follow).
 verdict: skip, maybe, good or great.
-start_sentence / end_sentence: the best edit. You may tighten, or extend into the CONTEXT sentences when the setup or payoff lives there. Start directly on the hook: drop greetings, filler and setup the viewer does not need. End right after the payoff or reaction. Keep it inside one story (never run into the next topic). Respect the target length.
+start_sentence / end_sentence: the best edit. You may tighten, or extend into the CONTEXT sentences when the setup or payoff lives there. The edit must CONTAIN the climax_sentence: end at the climax or shortly after it (a short reaction may stay), never before it. Start where the story becomes understandable: drop greetings and filler, but keep the setup a stranger needs (start a few seconds earlier rather than mid-story). Keep it inside one story (never run into the next topic). Aim for the target length, but a complete story beats an exact length: a clip with its payoff may run longer (up to the maximum story length), one that stops before the payoff is a failure. Never add anything after the reaction.
 category: the main type of moment.
 Packaging, written in the requested output language:
   title: a short on-screen hook text for the post (max 70 characters, no hashtags, no false claims).
@@ -198,6 +210,7 @@ def _evaluation_schema() -> dict[str, Any]:
                         "verdict": {"type": "string", "enum": list(VERDICTS)},
                         "start_sentence": {"type": "integer"},
                         "end_sentence": {"type": "integer"},
+                        "climax_sentence": {"type": "integer"},
                         "category": {"type": "string", "enum": list(CATEGORIES)},
                         "title": {"type": "string"},
                         "why": {"type": "string"},
@@ -206,7 +219,7 @@ def _evaluation_schema() -> dict[str, Any]:
                     },
                     "required": [
                         "id", "first_seconds", "viewer_reaction", "scores", "flags", "verdict", "start_sentence",
-                        "end_sentence", "category", "title", "why", "hook_line", "emphasis_words",
+                        "end_sentence", "climax_sentence", "category", "title", "why", "hook_line", "emphasis_words",
                     ],
                     "additionalProperties": False,
                 },
@@ -229,11 +242,14 @@ def evaluator_user_prompt(
     max_seconds: float,
     target_seconds: float,
     blocks: list[str],
+    story_max_seconds: float | None = None,
 ) -> str:
+    story_max = story_max_seconds or max_seconds
     head = [
         f'VIDEO: "{title}" by {creator or "unknown creator"}.',
         f"Output language for title, why, hook_line: {language_name(output_language)}.",
-        f"Target clip length: {min_seconds:g}-{max_seconds:g} seconds, ideally about {target_seconds:g} seconds.",
+        f"Target clip length: {min_seconds:g}-{max_seconds:g} seconds, ideally about {target_seconds:g} seconds"
+        f" (maximum story length {story_max:g} seconds, only when that is needed to reach the payoff).",
         "",
     ]
     return "\n".join(head + blocks + ["", "Evaluate every candidate above."])

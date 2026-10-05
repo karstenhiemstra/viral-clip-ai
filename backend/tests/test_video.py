@@ -245,6 +245,48 @@ def test_render_vertical_clip(test_video, tmp_path, preset, layout):
     assert res.thumbnail.exists()
 
 
+def test_overlay_styles_fullscreen_and_blurred(test_video, tmp_path, monkeypatch):
+    """The same clip in both overlay styles. Blurred: the whole 16:9 frame sharp in the middle, a blurred
+    copy above and below, captions as black text on a white label in the upper blurred band. Fullscreen:
+    exactly the existing render (CapCut captions at 76%)."""
+    import re
+
+    import app.video.render as render_mod
+
+    asses: list[str] = []
+    original = render_mod.build_ass
+
+    def spy(*args, **kwargs):
+        asses.append(original(*args, **kwargs))
+        return asses[-1]
+
+    monkeypatch.setattr(render_mod, "build_ass", spy)
+    info = ffmpeg.probe(test_video)
+    words = [(5.0 + i * 0.4, 5.35 + i * 0.4, w) for i, w in enumerate("Wacht wat dit is echt niet normaal".split())]
+    frames = {}
+    for layout in ("center", "fit_blur"):
+        res = render_clip(test_video, info, [(4.9, 8.0)], words, tmp_path / f"{layout}.mp4", tmp_path / f"{layout}.jpg",
+                          caption_preset="capcut", layout=layout)
+        out = ffmpeg.probe(res.video)
+        assert (out.width, out.height) == (1080, 1920) and res.meta["crop"]["layout"] == layout
+        raw = ffmpeg.run([ffmpeg.ffmpeg_bin(), "-v", "error", "-ss", "1.5", "-i", str(res.video), "-frames:v", "1",
+                          "-f", "rawvideo", "-pix_fmt", "gray", "-"]).stdout
+        frames[layout] = np.frombuffer(raw, dtype=np.uint8).reshape(1920, 1080).astype(float)
+    full, blurred = asses
+
+    # Fullscreen: unchanged CapCut captions, same as rendering the words directly
+    assert "Style: Cap,Poppins ExtraBold,130" in full
+    assert full == original(render_mod.output_words(words, [(4.9, 8.0)]), "capcut", y=caption_y(None, None, "center"))
+    # Blurred: the label look, every caption line above the sharp video (1280x720 -> 1080x608, top at 656)
+    assert "Style: Cap,Poppins,104,&H00000000" in blurred and ",Box," in blurred
+    ys = [float(y) for y in re.findall(r",Cap,,0,0,0,,\{\\an5\\pos\([\d.]+,([\d.]+)\)", blurred)]
+    assert ys and all(150 < y < 656 for y in ys)
+    # sharp in the middle, blurred above and below
+    detail = lambda img: float(np.mean(np.abs(np.diff(img, axis=1))))  # noqa: E731
+    bg = frames["fit_blur"]
+    assert detail(bg[700:1220]) > 4 * max(detail(bg[20:120]), detail(bg[1800:1900]))
+
+
 def test_load_profile_from_file(test_video):
     prof = load_profile(test_video)
     assert 29 <= prof.duration <= 31

@@ -28,7 +28,7 @@ def test_health_and_settings(client):
     assert data["settings"]["clips"]["min_seconds"] == 12
     assert data["settings"]["clips"]["max_seconds"] == 18
     assert data["system"]["llm"]["provider"] == "heuristic"
-    assert len(data["meta"]["dimensions"]) == 12
+    assert len(data["meta"]["dimensions"]) == 15
 
     r = client.patch("/api/settings", json={"clips": {"min_seconds": 10, "max_seconds": 20}, "scoring": {"weights": {"hook": 3}}})
     assert r.status_code == 200

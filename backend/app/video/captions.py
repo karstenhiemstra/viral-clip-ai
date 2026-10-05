@@ -12,6 +12,11 @@ libass cannot draw a box behind one word of a line, so every word is its own eve
 font's advance widths (``assets/fonts/Poppins-ExtraBold.metrics.json``), and the box is a vector drawing
 at exactly that place - text and box always line up.
 
+The "Blurred achtergrond" layout (sharp video in the middle, blurred copy above and below) has its own look,
+after the user's reference: the caption is a label in the upper blurred band - black Poppins Bold in normal
+case on a white box with rounded corners, one box per line, no word highlight (``LABEL``, chosen with
+``caption_preset_for``).
+
 Captions are a transcription in the spoken language (see ``app.ai.language``); this module only formats
 and times them. The user can edit the captions of a clip: the automatic grouping is offered as a list of
 cues ({start, end, text} in clip time, see ``auto_cues``), edited cues are stored on the clip and turned
@@ -61,6 +66,8 @@ class CaptionStyle:
     word_gap: float  # extra space between words (advance), in em
     line_gap: float  # px between two lines
     y: float  # vertical centre of the captions, fraction of the frame height
+    label: bool = False  # a white box behind each whole line (no word highlight), see LABEL
+    bold: bool = False  # ASS bold flag (selects the Bold face of a font family)
 
 
 CAPCUT = CaptionStyle(
@@ -69,7 +76,14 @@ CAPCUT = CaptionStyle(
     box_color="#28A7F0", box_pad_x=0.14, box_height=1.46, box_radius=7, uppercase=True,
     max_words=4, max_chars=22, max_line_width=0.88, word_gap=0.30, line_gap=14, y=0.76,
 )
-PRESETS: dict[str, CaptionStyle] = {"capcut": CAPCUT}
+# Captions of the "Blurred achtergrond" layout: a label in the upper blurred band.
+LABEL = CaptionStyle(
+    name="label", font="Poppins", metrics="Poppins-Bold.metrics.json", size=104, color="#000000",
+    outline_color="#FFFFFF", outline=0, shadow=0, shadow_color="#000000", shadow_alpha=0xFF, box_color="#FFFFFF",
+    box_pad_x=0.42, box_height=2.05, box_radius=16, uppercase=False, max_words=8, max_chars=38,
+    max_line_width=0.84, word_gap=0.0, line_gap=0, y=0.2, label=True, bold=True,
+)
+PRESETS: dict[str, CaptionStyle] = {"capcut": CAPCUT, "label": LABEL}
 # Clips and settings from before the CapCut style: they now get the CapCut style too.
 LEGACY_PRESETS = ("dynamic", "bold_white", "minimal")
 
@@ -79,6 +93,23 @@ def get_style(preset: str | None) -> CaptionStyle | None:
     if preset == "none":
         return None
     return PRESETS.get(preset or "capcut", CAPCUT)
+
+
+def caption_preset_for(preset: str | None, layout: str | None) -> str:
+    """The caption style that is rendered: the user's preset, except that the "Blurred achtergrond" layout
+    (fit_blur) has its own label look. "none" always means no captions."""
+    if preset == "none":
+        return "none"
+    return "label" if layout == "fit_blur" else (preset or "capcut")
+
+
+def blurred_positions(fg_height: int) -> tuple[int, int]:
+    """(caption centre y, title centre y) for the Blurred layout: in the upper blurred band above the
+    sharp video (``fg_height`` px high, centred). A source that fills the frame has no band: near the top."""
+    top = (PLAY_H - fg_height) / 2
+    if top < 300:
+        return int(PLAY_H * LABEL.y), int(PLAY_H * 0.07)
+    return int(top * 0.62), int(top * 0.26)
 
 
 _FINAL_PUNCT = re.compile(r"[.!?…]$")
@@ -201,6 +232,34 @@ def _layout(texts: list[str], style: CaptionStyle, font: _Font, y: int) -> list[
     return out
 
 
+def _label_lines(texts: list[str], style: CaptionStyle, font: _Font) -> list[str]:
+    """Words -> lines of at most ``max_line_width`` (as the font measures them)."""
+    max_w = style.max_line_width * PLAY_W
+    lines: list[str] = []
+    for t in texts:
+        if lines and font.width(lines[-1] + " " + t) <= max_w:
+            lines[-1] += " " + t
+        else:
+            lines.append(t)
+    return lines
+
+
+def _label_events(lines: list[str], start: float, end: float, style: CaptionStyle, font: _Font, y: int) -> list[str]:
+    """One white rounded box + one black text per line, the lines centred around ``y``."""
+    events: list[str] = []
+    bh = font.cap * style.box_height
+    line_h = bh + style.line_gap
+    for li, line in enumerate(lines):
+        width = font.width(line)
+        scale = min(1.0, style.max_line_width * PLAY_W / width) if width else 1.0  # one very long word
+        cy = y + (li - (len(lines) - 1) / 2) * line_h
+        bw = (width + 2 * style.box_pad_x * font.em) * scale
+        fs = f"\\fscx{round(scale * 100)}\\fscy{round(scale * 100)}" if scale < 1 else ""
+        events.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Box,,0,0,0,,{_box(PLAY_W / 2 - bw / 2, cy - bh / 2, bw, bh, style.box_radius)}")
+        events.append(f"Dialogue: 1,{_ts(start)},{_ts(end)},Cap,,0,0,0,,{{\\an5\\pos({PLAY_W / 2:.1f},{cy + font.cap_shift * scale:.1f}){fs}}}{_escape(line)}")
+    return events
+
+
 def build_ass(
     words: list[CaptionWord],
     preset: str,
@@ -210,6 +269,7 @@ def build_ass(
     title: str | None = None,
     title_duration: float = 2.8,
     groups: list[list[CaptionWord]] | None = None,
+    title_y: int | None = None,
 ) -> str:
     """ASS subtitles in the CapCut style. ``groups`` (from ``cues_to_groups``): captions edited by the user,
     shown exactly at their own times; otherwise ``words`` are grouped automatically. ``emphasis`` is accepted
@@ -227,9 +287,9 @@ YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,{style.font},{style.size},{ass_color(style.color)},{ass_color(style.color)},{ass_color(style.outline_color)},{shadow},0,0,0,0,100,100,0,0,1,{style.outline},{style.shadow},5,0,0,0,1
+Style: Cap,{style.font},{style.size},{ass_color(style.color)},{ass_color(style.color)},{ass_color(style.outline_color)},{shadow},{-1 if style.bold else 0},0,0,0,100,100,0,0,1,{style.outline},{style.shadow},5,0,0,0,1
 Style: Box,{style.font},{style.size},{ass_color(style.box_color)},{ass_color(style.box_color)},{ass_color(style.box_color)},{ass_color(style.box_color)},0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
-Style: Title,{style.font},64,{ass_color('#111111')},{ass_color('#111111')},{ass_color('#FFFFFF')},{ass_color('#FFFFFF', 0)},0,0,0,0,100,100,0,0,3,18,0,5,80,80,0,1
+Style: Title,{style.font},64,{ass_color('#111111')},{ass_color('#111111')},{ass_color('#FFFFFF')},{ass_color('#FFFFFF', 0)},{-1 if style.bold else 0},0,0,0,100,100,0,0,3,18,0,5,80,80,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -242,6 +302,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         g_start = group[0].start
         g_end = group[-1].end if exact else _group_end(groups, gi)
         texts = [_display_text(w, style) for w in group]
+        if style.label:
+            lines = _label_lines([t for t in texts if t], style, font)
+            events += _label_events(lines, g_start, g_end, style, font, y) if lines else []
+            continue
         places = _layout(texts, style, font, y)
         for i, (w, txt, (cx, cy, width, scale)) in enumerate(zip(group, texts, places, strict=True)):
             if not txt:
@@ -259,7 +323,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             events.append(f"Dialogue: 0,{_ts(s)},{_ts(e)},Box,,0,0,0,,{_box(cx - bw / 2, cy - bh / 2, bw, bh, style.box_radius)}")
 
     if title:
-        tpos = f"{{\\an5\\pos({PLAY_W // 2},{int(PLAY_H * 0.16)})\\fad(120,200)}}"
+        ty = int(PLAY_H * 0.16) if title_y is None else title_y
+        tpos = f"{{\\an5\\pos({PLAY_W // 2},{ty})\\fad(120,200)}}"
         events.append(f"Dialogue: 2,{_ts(0)},{_ts(title_duration)},Title,,0,0,0,,{tpos}{_escape(title[:70])}")
     return header + "\n".join(events) + "\n"
 

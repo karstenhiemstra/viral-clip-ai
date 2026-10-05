@@ -210,17 +210,38 @@ export default function ClipDetailPage() {
           <Card className="space-y-4 p-4">
             <p className="text-xs font-semibold text-ink-2">Bewerken & opnieuw renderen</p>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Captions" hint={clip.captions_custom ? "Met je eigen aangepaste captions" : undefined}>
+              <Field label="Captions" hint={[clip.layout === "fit_blur" && clip.caption_preset !== "none" ? "Bij Blurred achtergrond: zwarte tekst op een wit label, bovenin" : null, clip.captions_custom ? "Met je eigen aangepaste captions" : null].filter(Boolean).join(" · ") || undefined}>
                 <Select className="w-full" value={presetValue(clip.caption_preset)} onChange={(e) => patch({ caption_preset: e.target.value }, "Captions aangepast — clip wordt opnieuw gerenderd")}>
                   {Object.entries(PRESET_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
                 </Select>
               </Field>
-              <Field label="Beeld (9:16)">
-                <Select className="w-full" value={clip.layout ?? "auto"} onChange={(e) => patch({ layout: e.target.value }, "Layout aangepast — clip wordt opnieuw gerenderd")}>
-                  {Object.entries(LAYOUT_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                </Select>
-              </Field>
+              {clip.layout !== "fit_blur" && (
+                <Field label="Uitsnede (fullscreen)">
+                  <Select className="w-full" value={clip.layout ?? "auto"} onChange={(e) => patch({ layout: e.target.value }, "Layout aangepast — clip wordt opnieuw gerenderd")}>
+                    {Object.entries(LAYOUT_LABELS).filter(([k]) => k !== "fit_blur").map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </Select>
+                </Field>
+              )}
             </div>
+            <Field label="Overlay / Layout" hint="Geldt voor de preview én de uiteindelijke MP4">
+              <div role="radiogroup" aria-label="Overlay / Layout" className="flex flex-wrap gap-x-5 gap-y-2 text-sm">
+                {([["fullscreen", "Fullscreen"], ["blurred", "Blurred achtergrond"]] as const).map(([value, label]) => {
+                  const blurred = clip.layout === "fit_blur";
+                  return (
+                    <label key={value} className="flex cursor-pointer items-center gap-2">
+                      <input
+                        type="radio"
+                        name="overlay"
+                        checked={blurred === (value === "blurred")}
+                        disabled={saving}
+                        onChange={() => patch({ layout: value === "blurred" ? "fit_blur" : "auto" }, "Overlay aangepast — clip wordt opnieuw gerenderd")}
+                      />
+                      {label}
+                    </label>
+                  );
+                })}
+              </div>
+            </Field>
             <div className="grid grid-cols-2 gap-3 text-xs">
               {(["start", "end"] as const).map((w) => (
                 <div key={w} className="space-y-1.5">

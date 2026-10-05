@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.models import AppSetting
 
-# The 12 scoring dimensions. Keep in sync with app.ai.scoring.DIMENSIONS.
+# The scoring dimensions. Keep in sync with app.ai.scoring.DIMENSIONS.
 DEFAULT_WEIGHTS: dict[str, float] = {
     "hook": 1.6,
     "hook_strength": 1.3,
@@ -32,8 +32,11 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "comment_potential": 1.0,
     "retention": 1.5,
     "context": 1.2,
-    "payoff": 1.3,
+    "payoff": 1.5,
     "rewatch": 0.7,
+    "buildup": 0.9,
+    "ending": 1.2,
+    "standalone": 1.0,
 }
 
 DEFAULT_STAGE_WEIGHTS: dict[str, float] = {"stop": 0.40, "hold": 0.35, "engage": 0.25}

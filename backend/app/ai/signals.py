@@ -8,6 +8,7 @@ They serve three purposes:
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
 from dataclasses import dataclass, field
@@ -175,6 +176,11 @@ def category_hits(tokens: list[str], text: str = "") -> dict[str, int]:
     return hits
 
 
+def punchline_hits(words: list[Word]) -> int:
+    """Laughter / punchline markers in these words ("hahaha", "[gelach]", "lol", ...)."""
+    return category_hits(_tokens(words), " ".join(w.text for w in words))["humor"]
+
+
 def strong_token(tok: str) -> bool:
     if any(tok in LEXICON[c] for c in STRONG_CATEGORIES):
         return True
@@ -263,6 +269,12 @@ def window_features(ctx: VideoContext, start: float, end: float, clip_words: lis
         or [0.0]
     )
     feats["payoff_after_end"] = 1.0 if audio.get("available") and after > max(1.8, audio.get("peak_z", 0) + 0.4) else 0.0
+    # The punchline/laugh is said right after the cut (transcript) while the clip itself does not end on one.
+    i = bisect.bisect_left(ctx.words, end - 0.01, key=lambda w: w.start)
+    after_words = [w for w in ctx.words[i : i + 12] if w.start < end + 4.0]
+    feats["punchline_after_end"] = 1.0 if (
+        after_words and after_words[0].start - end < 1.5 and punchline_hits(after_words) and not feats["humor_end"]
+    ) else 0.0
     return feats
 
 
@@ -271,7 +283,7 @@ def _c(x: float) -> float:
 
 
 def heuristic_dimension_scores(f: dict[str, float]) -> dict[str, float]:
-    """Rule-based estimates of the 12 dimensions. Used when no LLM is configured and as a fallback."""
+    """Rule-based estimates of the dimensions. Used when no LLM is configured and as a fallback."""
     audio = f.get("audio_available", 0.0) > 0
     peak = max(0.0, min(3.5, f.get("audio_peak_z", 0.0))) if audio else 0.0
     hook_z = max(-1.5, min(2.5, f.get("audio_hook_z", 0.0))) if audio else 0.0
@@ -298,6 +310,17 @@ def heuristic_dimension_scores(f: dict[str, float]) -> dict[str, float]:
     context -= 25 * topic
     payoff = 38 + 16 * (1 if f.get("audio_peak_pos", 0) > 0.5 else 0) + 8 * max(0, f.get("audio_end_z", 0))
     payoff += 12 * f.get("humor_end", 0) + 10 * f.get("ends_complete", 0) - 25 * f.get("payoff_after_end", 0)
+    payoff -= 15 * f.get("punchline_after_end", 0)
+    # the story arc: build-up towards a climax, a strong ending, a complete story on its own
+    peak_pos = f.get("audio_peak_pos", 0.0) if audio else 0.0
+    buildup = 40 + 22 * (1 if peak > 1.5 and 0.3 <= peak_pos <= 0.97 else 0) + 7 * min(2, f.get("lex_story", 0))
+    buildup += 5 * min(2, f.get("questions", 0)) + 8 * f.get("lex_teaser", 0)
+    buildup -= 14 * f.get("hook_context_opener", 0) + 18 * (1 if peak > 1.8 and peak_pos < 0.12 else 0)
+    ending = 42 + 14 * f.get("ends_complete", 0) + 14 * f.get("humor_end", 0) + 8 * max(0, f.get("audio_end_z", 0))
+    ending += 12 * (1 if peak > 1.5 and peak_pos >= 0.55 else 0)
+    ending -= 35 * f.get("payoff_after_end", 0) + 15 * f.get("punchline_after_end", 0) + 25 * f.get("outro", 0)
+    standalone = 76 - 24 * f.get("hook_context_opener", 0) - 8 * f.get("hook_starts_filler", 0) - 12 * f.get("intro", 0)
+    standalone += 6 * f.get("ends_complete", 0) - 25 * topic - 10 * f.get("payoff_after_end", 0)
     share = 0.35 * humor_s + 0.3 * surprise + 0.2 * emotion + 0.15 * curiosity + 22 * crowd
     rewatch = 0.45 * humor_s + 0.25 * surprise + 8 * min(1.4, rel_rate) + 10 * crowd
     scores = {
@@ -313,6 +336,9 @@ def heuristic_dimension_scores(f: dict[str, float]) -> dict[str, float]:
         "context": context,
         "payoff": payoff,
         "rewatch": rewatch,
+        "buildup": buildup,
+        "ending": ending,
+        "standalone": standalone,
     }
     return {k: round(_c(v), 1) for k, v in scores.items()}
 
@@ -332,7 +358,7 @@ def signal_score(f: dict[str, float]) -> float:
     if audio:
         s += 7 * max(0.0, min(3.0, f.get("audio_peak_z", 0))) + 4 * max(-1.0, min(2.0, f.get("audio_hook_z", 0)))
         s -= 30 * f.get("audio_silence_ratio", 0)
-    s -= 25 * f.get("outro", 0) + 20 * f.get("intro", 0) + 10 * f.get("payoff_after_end", 0)
+    s -= 25 * f.get("outro", 0) + 20 * f.get("intro", 0) + 10 * f.get("payoff_after_end", 0) + 5 * f.get("punchline_after_end", 0)
     if f.get("topic_break", 0.0) >= 0.5:  # two topics glued together
         s -= 22 * f["topic_break"]
     return round(_c(s), 1)
@@ -345,7 +371,7 @@ def feature_vector(f: dict[str, float], scores: dict[str, float] | None = None) 
         "ends_complete", "humor_end", "lex_question", "lex_intensity", "lex_humor", "lex_surprise",
         "lex_controversy", "lex_story", "lex_stakes", "lex_teaser", "audio_peak_z", "audio_hook_z", "audio_silence_ratio",
         "audio_peak_pos", "hook_starts_filler", "hook_context_opener", "hook_time_to_strong", "hook_first_strength",
-        "hook_first_question", "intro", "payoff_after_end", "topic_break",
+        "hook_first_question", "intro", "payoff_after_end", "topic_break", "punchline_after_end",
     )
     vec = {k: float(f.get(k, 0.0)) for k in keys}
     for k, v in (scores or {}).items():

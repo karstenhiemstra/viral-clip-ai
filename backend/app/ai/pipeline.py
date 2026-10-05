@@ -5,7 +5,7 @@
       -> PASS 1: signal windows  +  LLM on the full transcript (cheap model) stage 1
       -> PASS 2: merge + dedupe + shortlist top N (free, local)
       -> PASS 3: smart model judges ONLY the shortlist: viewer simulation,
-         12 dimensions, verdict, better edit                                 stages 2-7
+         dimension scores, climax, verdict, better edit           stages 2-7
       -> hook-first boundary optimisation + dead-air removal                stage 10
       -> funnel Viral Score (+ signal blend, penalties, crowd, personal)    stage 9
       -> optional vision pass on the best few                               pass 5
@@ -250,6 +250,7 @@ def analyze_video(
             evaluated_by_llm = evaluate_llm(
                 llm, ctx, shortlist, min_s=rules.min_seconds, max_s=rules.max_seconds, target_s=rules.target_seconds,
                 output_language=lang, batch_size=rs.pipeline.detail_batch_size, meter=meter,
+                story_max_s=rules.max_seconds + rules.tolerance,
                 progress=lambda f: report(50 + 30 * f, "Pass 3 (slim model): kandidaten beoordelen"), warnings=warnings,
             )
         except LLMFatalError as e:
@@ -267,14 +268,20 @@ def analyze_video(
     for c in shortlist:
         ev = c.evaluation or {}
         llm_mode = ev.get("mode") == "llm"
-        window = optimize_boundaries(ctx, ev.get("s0", c.s0), ev.get("s1", c.s1), rules, hook_s=None if llm_mode else c.hook_s)
+        window = optimize_boundaries(
+            ctx, ev.get("s0", c.s0), ev.get("s1", c.s1), rules, hook_s=None if llm_mode else c.hook_s,
+            climax_s=ev.get("climax_s") if llm_mode else None,
+        )
         clip_words = ctx.words[window.w0 : window.w1]
         feats = window_features(ctx, window.start, window.end, clip_words)
         sig_score = signal_score(feats)
         dims = dict(ev.get("scores") or {}) if llm_mode else heuristic_dimension_scores(feats)
         # Heuristic flags describe the FINAL window (boundaries may have moved); LLM flags are kept.
         base_flags = (ev.get("flags") or []) if llm_mode else heuristic_flags(feats)
-        flags = sorted(set(base_flags) | set(window.flags))
+        flags = set(base_flags) | set(window.flags)
+        if feats.get("payoff_after_end"):  # the audio: the big reaction comes right after the cut
+            flags.add("ends_before_payoff")
+        flags = sorted(flags)
         if not llm_mode:  # packaging must describe the final (possibly moved) window
             ev = {**ev, **heuristic_packaging(ctx, clip_words, feats, c.category)}
         category = ev.get("category") or c.category or "other"

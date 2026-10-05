@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from app.ai.signals import VideoContext, signal_score, window_features
+from app.ai.signals import VideoContext, punchline_hits, signal_score, window_features
 from app.ai.transcript import (
     Sentence,
     contains_outro,
@@ -30,6 +30,10 @@ from app.video.audio_features import clip_features, loud_tail
 
 _END_PUNCT = re.compile(r"[.!?…]+[\"'”’)]*$")
 TOPIC_BREAK = 0.6  # a topic change at least this strong is not crossed when growing a clip
+# A clip is a complete mini story: build-up -> tension -> CLIMAX/PAYOFF -> (short reaction).
+LOOKAHEAD_SENTENCES = 3  # how far past the end to look for a payoff that comes later (punchline, reaction)
+LOOKAHEAD_SECONDS = 10.0
+CONTEXT_LEAD_SECONDS = 5.0  # a clip that opens right on its climax gets up to this much setup before it
 
 
 @dataclass
@@ -133,12 +137,54 @@ def _strongest_part(ctx: VideoContext, s0: int, s1: int) -> tuple[int, int]:
     return max(parts, key=strength)
 
 
-def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_s: int | None) -> tuple[int, int]:
-    """Best contiguous sentence span inside [s0, s1], extending outward when the span is too short."""
+def _payoff_after(ctx: VideoContext, s0: int, s1: int, lexical: bool) -> int | None:
+    """A payoff that comes AFTER the span, in the same story: the sentence (within a few sentences/seconds)
+    with a clearly stronger reaction in the audio than anything inside the span or, when ``lexical``, a
+    punchline/laugh in the transcript while the span itself does not end on one. None if there is none."""
+    n = len(ctx.sentences)
+    end = ctx.sentences[s1].end
+    inside_peak = 0.0
+    if ctx.audio is not None:
+        inside = clip_features(ctx.audio, ctx.sentences[s0].start, end)
+        inside_peak = inside["peak_z"] if inside.get("available") else 0.0
+    last = ctx.sentences[s1]
+    ends_on_punchline = punchline_hits(ctx.words[last.w0 : last.w1]) > 0
+    best, best_gain, prev = None, 0.0, s1
+    for k in range(s1 + 1, min(n, s1 + 1 + LOOKAHEAD_SENTENCES)):
+        sk = ctx.sentences[k]
+        if (
+            sk.start - ctx.sentences[prev].end >= 2.0
+            or sk.end - end > LOOKAHEAD_SECONDS
+            or contains_outro(sk.text)
+            or ctx.break_between(prev, k) >= TOPIC_BREAK
+        ):
+            break
+        gain = 0.0
+        if ctx.audio is not None:
+            f = clip_features(ctx.audio, sk.start, sk.end)
+            if f.get("available") and f["peak_z"] > max(1.8, inside_peak + 0.4):
+                gain = f["peak_z"] - inside_peak
+        if not gain and lexical and not ends_on_punchline and punchline_hits(ctx.words[sk.w0 : sk.w1]) > 0:
+            gain = 0.5
+        if gain > best_gain:
+            best, best_gain = k, gain
+        prev = k
+    return best
+
+
+def choose_span(
+    ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_s: int | None, climax_s: int | None = None
+) -> tuple[int, int]:
+    """Best contiguous sentence span inside [s0, s1], extending outward when the span is too short.
+    ``climax_s``: the sentence with the climax/payoff (from the AI evaluation): the clip always contains it."""
     n = len(ctx.sentences)
     s0, s1 = max(0, min(s0, n - 1)), max(0, min(s1, n - 1))
     if s1 < s0:
         s0, s1 = s1, s0
+    if climax_s is not None:
+        climax_s = max(0, min(climax_s, n - 1))
+        s0, s1 = min(s0, climax_s), max(s1, climax_s)
+    keep_end = s0 if climax_s is None else climax_s  # never strip the climax away
     # 0. one story per clip (heuristic mode): a span that contains a clear topic change is cut there,
     #    keeping the part with the strongest signals; the clip then starts on that part's first sentence.
     #    (An LLM-chosen span, hook_s=None, is trusted; it only gets the "mixes_topics" flag.)
@@ -148,7 +194,7 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
     # 1. strip filler/outro edges
     while s0 < s1 and (is_filler_sentence(ctx.sentences[s0], ctx.words) or contains_outro(ctx.sentences[s0].text)):
         s0 += 1
-    while s1 > s0 and (is_filler_sentence(ctx.sentences[s1], ctx.words) or contains_outro(ctx.sentences[s1].text)):
+    while s1 > max(s0, keep_end) and (is_filler_sentence(ctx.sentences[s1], ctx.words) or contains_outro(ctx.sentences[s1].text)):
         s1 -= 1
     # 1b. context repair (heuristic mode): a clip opening on a reference word ("Ze heeft...",
     #     "Hij zei...") gets the sentence that introduces the reference, if it directly precedes it.
@@ -192,25 +238,40 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
                 grew = True
         if not grew:
             break
-    # 2b. payoff-aware: when the strongest reaction comes right after the span, include it
-    #     (and, if needed, drop setup sentences before the hook to stay within the limit).
-    if ctx.audio is not None and s1 + 1 < n:
-        inside = clip_features(ctx.audio, ctx.sentences[s0].start, ctx.sentences[s1].end)
-        nxt = ctx.sentences[s1 + 1]
-        after = clip_features(ctx.audio, nxt.start, nxt.end)
-        if (
-            after.get("available")
-            and after["peak_z"] > max(1.8, inside["peak_z"] + 0.4)
-            and nxt.start - ctx.sentences[s1].end < 2.0
-            and not contains_outro(nxt.text)
-            and ctx.break_between(s1, s1 + 1) < TOPIC_BREAK
-        ):
-            s1 += 1
-            while _span_duration(ctx, s0, s1) > hard_max and s0 < s1 and (hook_s is None or s0 < hook_s):
-                s0 += 1
+    # 2b. payoff-aware: look ahead - when the climax (the strongest reaction, or in heuristic mode a punchline
+    #     in the transcript) comes a few sentences after the span, in the same story, extend to it (dropping
+    #     setup before the hook if needed to stay within the limit). Never stop just before the payoff.
+    target = _payoff_after(ctx, s0, s1, lexical=hook_s is not None)
+    if target is not None:
+        a = s0
+        while _span_duration(ctx, a, target) > hard_max and a < target and (hook_s is None or a < hook_s):
+            a += 1
+        if _span_duration(ctx, a, target) <= hard_max:
+            s0, s1 = a, target
+    # 2b'. context before the climax (heuristic mode): a clip that opens right on its climax (the loudest
+    #     moment is in its first sentence) shows a reaction without the reason; start up to a few seconds
+    #     earlier on the setup of the same story.
+    if hook_s is not None and ctx.audio is not None and s1 > s0:
+        first = clip_features(ctx.audio, ctx.sentences[s0].start, ctx.sentences[s0].end)
+        rest = clip_features(ctx.audio, ctx.sentences[s0 + 1].start, ctx.sentences[s1].end)
+        if first.get("available") and first["peak_z"] >= 1.8 and first["peak_z"] > rest["peak_z"] + 0.4:
+            start0 = ctx.sentences[s0].start
+            while s0 > 0:
+                prev = ctx.sentences[s0 - 1]
+                if (
+                    start0 - prev.start > CONTEXT_LEAD_SECONDS
+                    or ctx.sentences[s0].start - prev.end >= 1.5
+                    or ctx.break_between(s0 - 1, s0) >= TOPIC_BREAK
+                    or is_filler_sentence(prev, ctx.words)
+                    or contains_outro(prev.text)
+                    or _span_duration(ctx, s0 - 1, s1) > soft_max_of(rules)
+                ):
+                    break
+                s0 -= 1
+                hook_s = s0
     # 2c. escalation: while the same story keeps its energy (the next sentence is about as loud as the
     #     loudest moment so far), keep going: stories peak at the end (the reveal, the punchline).
-    soft_max = rules.max_seconds + 1.0
+    soft_max = soft_max_of(rules)
     while ctx.audio is not None and s1 + 1 < n:
         inside = clip_features(ctx.audio, ctx.sentences[s0].start, ctx.sentences[s1].end)
         nxt = ctx.sentences[s1 + 1]
@@ -225,12 +286,13 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
         ):
             break
         s1 += 1
-    # 3. if too long, search the best sub-span
-    if _span_duration(ctx, s0, s1) > soft_max:
+    # 3. if too long, search the best sub-span (one that keeps the climax: a complete story may use the
+    #    full tolerance instead of being cut before its payoff)
+    if _span_duration(ctx, s0, s1) > (soft_max if climax_s is None else hard_max):
         key_times = _key_times(ctx, s0, s1)
-        best, best_score = (s0, s1), float("-inf")
-        for a in range(s0, s1 + 1):
-            for b in range(a, s1 + 1):
+        best, best_score = ((s0, s1) if climax_s is None else (climax_s, climax_s)), float("-inf")
+        for a in range(s0, s1 + 1 if climax_s is None else climax_s + 1):
+            for b in range(a if climax_s is None else max(a, climax_s), s1 + 1):
                 if _span_duration(ctx, a, b) > hard_max:
                     break
                 sc = _subspan_score(ctx, a, b, rules, hook_s, key_times)
@@ -238,6 +300,10 @@ def choose_span(ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_
                     best, best_score = (a, b), sc
         s0, s1 = best
     return s0, s1
+
+
+def soft_max_of(rules: DurationRules) -> float:
+    return rules.max_seconds + 1.0
 
 
 def _cut_long_sentence(ctx: VideoContext, w0: int, w1: int, rules: DurationRules) -> int:
@@ -259,9 +325,9 @@ def _cut_long_sentence(ctx: VideoContext, w0: int, w1: int, rules: DurationRules
 
 
 def optimize_boundaries(
-    ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_s: int | None = None
+    ctx: VideoContext, s0: int, s1: int, rules: DurationRules, hook_s: int | None = None, climax_s: int | None = None
 ) -> ClipWindow:
-    s0, s1 = choose_span(ctx, s0, s1, rules, hook_s)
+    s0, s1 = choose_span(ctx, s0, s1, rules, hook_s, climax_s)
     sa: Sentence = ctx.sentences[s0]
     sb: Sentence = ctx.sentences[s1]
     w0, w1 = sa.w0, sb.w1

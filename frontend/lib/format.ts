@@ -81,6 +81,9 @@ export const FLAG_LABELS: Record<string, string> = {
   sponsor_or_ad: "Sponsor / reclame",
   intro_or_outro: "Intro / outro",
   mixes_topics: "Twee onderwerpen door elkaar",
+  ends_before_payoff: "Stopt vóór de climax",
+  no_climax: "Geen climax / pay-off",
+  starts_mid_story: "Begint midden in het verhaal",
   low_energy: "Weinig energie",
   repetitive: "Herhalend",
   sensitive: "Gevoelig onderwerp",
@@ -142,8 +145,11 @@ export const DIMENSION_LABELS: Record<string, string> = {
   comment_potential: "Comment Potential",
   retention: "Retention",
   context: "Context",
-  payoff: "Payoff",
+  payoff: "Climax / Payoff",
   rewatch: "Rewatch",
+  buildup: "Opbouw",
+  ending: "Sterk einde",
+  standalone: "Zelfstandigheid",
 };
 
 export const STAGE_LABELS: Record<string, { label: string; hint: string }> = {
@@ -164,6 +170,6 @@ export const LAYOUT_LABELS: Record<string, string> = {
   auto: "Automatisch",
   face: "Volg spreker",
   center: "Midden crop",
-  fit_blur: "Volledig beeld + blur",
+  fit_blur: "Blurred achtergrond",
   split: "Split screen (2 personen)",
 };

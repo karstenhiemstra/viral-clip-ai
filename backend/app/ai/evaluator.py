@@ -1,8 +1,9 @@
 """Pass 3 (stages 2-7) - detailed evaluation of ONLY the shortlisted candidates.
 
 LLM mode: candidates are judged in small batches (default 6) by the "smart" model with the rubric in
-``prompts.EVALUATOR_SYSTEM``: viewer simulation, 12 calibrated dimension scores (hook, context,
-retention, emotion, share/comment potential, ...), flags, verdict and an improved edit (sentence ids).
+``prompts.EVALUATOR_SYSTEM``: viewer simulation, calibrated dimension scores (hook, context, retention,
+emotion, share/comment potential, build-up, ending, ...), flags, verdict, the climax sentence and an
+improved edit (sentence ids) that always contains that climax (a clip is a complete mini story).
 Batching lets the model compare candidates, which improves calibration, and shares the cached rubric.
 
 Heuristic mode: the same output shape is produced from deterministic signals, so the rest of the
@@ -32,6 +33,11 @@ from app.ai.transcript import fmt_ts, normalize
 
 log = logging.getLogger(__name__)
 
+# Context shown around a candidate (and how far the edit may move): a few sentences of setup before it, more
+# after it - the climax (punchline, reveal, reaction) often comes some seconds after the first interesting line.
+CONTEXT_BEFORE = 4
+CONTEXT_AFTER = 6
+
 
 def _signal_notes(ctx: VideoContext, c: Candidate) -> list[str]:
     a, b = c.span(ctx)
@@ -60,6 +66,7 @@ def evaluate_llm(
     meter: UsageMeter,
     progress: Callable[[float], None] | None = None,
     warnings: list[str] | None = None,
+    story_max_s: float | None = None,
 ) -> int:
     """Fills ``candidate.evaluation``. Returns how many candidates got an LLM evaluation."""
     n = len(ctx.sentences)
@@ -68,13 +75,13 @@ def evaluate_llm(
     for bi, batch in enumerate(batches):
         blocks = []
         for c in batch:
-            before = ctx.sentences[max(0, c.s0 - 3) : c.s0]
-            after = ctx.sentences[c.s1 + 1 : min(n, c.s1 + 4)]
+            before = ctx.sentences[max(0, c.s0 - CONTEXT_BEFORE) : c.s0]
+            after = ctx.sentences[c.s1 + 1 : min(n, c.s1 + 1 + CONTEXT_AFTER)]
             note = c.reason or c.description or None
             blocks.append(candidate_block(c.cid, before, ctx.sentences[c.s0 : c.s1 + 1], after, note, _signal_notes(ctx, c)))
         prompt = evaluator_user_prompt(
             title=ctx.title, creator=ctx.creator, output_language=output_language, min_seconds=min_s,
-            max_seconds=max_s, target_seconds=target_s, blocks=blocks,
+            max_seconds=max_s, target_seconds=target_s, blocks=blocks, story_max_seconds=story_max_s,
         )
         try:
             res = llm.complete_json(
@@ -116,14 +123,28 @@ def sanitize_evaluation(ev: dict[str, Any], c: Candidate, n_sentences: int) -> d
         s1 = int(ev.get("end_sentence", c.s1))
     except (TypeError, ValueError):
         s0, s1 = c.s0, c.s1
-    # The edit may move at most 3 sentences outside the shown span (that is all the context it saw).
-    s0 = max(0, c.s0 - 3, min(s0, c.s1))
-    s1 = min(n_sentences - 1, c.s1 + 3, max(s1, s0))
+    # The edit may only move into the context it saw.
+    lo, hi = max(0, c.s0 - CONTEXT_BEFORE), min(n_sentences - 1, c.s1 + CONTEXT_AFTER)
+    s0 = max(lo, min(s0, c.s1))
+    s1 = min(hi, max(s1, s0))
+    flags = [f for f in (ev.get("flags") or []) if f in FLAGS]
+    try:
+        climax = int(ev.get("climax_sentence", -1))
+    except (TypeError, ValueError):
+        climax = -1
+    climax_s = climax if lo <= climax <= hi else None
+    if climax_s is not None:
+        # a complete story: the clip never ends before (or starts after) its climax
+        s0, s1 = min(s0, climax_s), max(s1, climax_s)
+        flags = [f for f in flags if f != "ends_before_payoff"]  # that is fixed now
+    elif climax == -1 and "no_climax" not in flags:
+        flags.append("no_climax")
     verdict = str(ev.get("verdict", "maybe")).lower()
     category = str(ev.get("category") or c.category or "other").lower()
     return {
         "scores": scores,
-        "flags": [f for f in (ev.get("flags") or []) if f in FLAGS],
+        "flags": flags,
+        "climax_s": climax_s,
         "verdict": verdict if verdict in VERDICTS else "maybe",
         "s0": s0,
         "s1": s1,
@@ -208,6 +229,8 @@ def heuristic_flags(f: dict[str, float]) -> list[str]:
     if f.get("outro") or f.get("intro"):
         flags.append("intro_or_outro")
     if f.get("payoff_after_end"):
+        flags.append("ends_before_payoff")  # the big reaction comes right after the cut
+    elif f.get("punchline_after_end"):
         flags.append("weak_payoff")
     if f.get("audio_available") and f.get("audio_silence_ratio", 0) > 0.3:
         flags.append("low_energy")

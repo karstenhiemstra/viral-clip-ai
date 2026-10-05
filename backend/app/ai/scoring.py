@@ -31,11 +31,14 @@ DIMENSIONS: tuple[str, ...] = (
     "context",
     "payoff",
     "rewatch",
+    "buildup",
+    "ending",
+    "standalone",
 )
 
 STAGES: dict[str, tuple[str, ...]] = {
     "stop": ("hook", "hook_strength", "curiosity"),
-    "hold": ("retention", "payoff", "context", "surprise", "emotion"),
+    "hold": ("retention", "payoff", "context", "surprise", "emotion", "buildup", "ending", "standalone"),
     "engage": ("shareability", "comment_potential", "humor", "rewatch"),
 }
 
@@ -52,6 +55,10 @@ FLAG_PENALTIES: dict[str, float] = {
     "repetitive": 0.93,
     "sensitive": 0.85,
     "mixes_topics": 0.85,  # two unrelated parts of the video glued together
+    # A clip is a complete mini story (build-up -> tension -> climax/payoff -> reaction):
+    "ends_before_payoff": 0.7,  # the climax/punchline/reaction happens after the cut (cliffhanger without payoff)
+    "no_climax": 0.8,  # nothing ever pays off: no punchline, reveal, reaction or conclusion
+    "starts_mid_story": 0.87,  # opens in the middle of a story the viewer cannot follow
 }
 
 VERDICT_CAPS: dict[str, float] = {"skip": 45.0, "maybe": 76.0, "good": 92.0, "great": 100.0}
@@ -67,8 +74,11 @@ LABELS_NL: dict[str, str] = {
     "comment_potential": "Comment Potential",
     "retention": "Retention",
     "context": "Context",
-    "payoff": "Payoff",
+    "payoff": "Climax / Payoff",
     "rewatch": "Rewatch",
+    "buildup": "Opbouw",
+    "ending": "Sterk einde",
+    "standalone": "Zelfstandigheid",
 }
 
 
