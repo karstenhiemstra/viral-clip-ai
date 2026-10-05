@@ -66,7 +66,6 @@ def evaluate_llm(
     meter: UsageMeter,
     progress: Callable[[float], None] | None = None,
     warnings: list[str] | None = None,
-    story_max_s: float | None = None,
 ) -> int:
     """Fills ``candidate.evaluation``. Returns how many candidates got an LLM evaluation."""
     n = len(ctx.sentences)
@@ -81,7 +80,7 @@ def evaluate_llm(
             blocks.append(candidate_block(c.cid, before, ctx.sentences[c.s0 : c.s1 + 1], after, note, _signal_notes(ctx, c)))
         prompt = evaluator_user_prompt(
             title=ctx.title, creator=ctx.creator, output_language=output_language, min_seconds=min_s,
-            max_seconds=max_s, target_seconds=target_s, blocks=blocks, story_max_seconds=story_max_s,
+            max_seconds=max_s, target_seconds=target_s, blocks=blocks,
         )
         try:
             res = llm.complete_json(
@@ -128,23 +127,33 @@ def sanitize_evaluation(ev: dict[str, Any], c: Candidate, n_sentences: int) -> d
     s0 = max(lo, min(s0, c.s1))
     s1 = min(hi, max(s1, s0))
     flags = [f for f in (ev.get("flags") or []) if f in FLAGS]
-    try:
-        climax = int(ev.get("climax_sentence", -1))
-    except (TypeError, ValueError):
-        climax = -1
+
+
+    def sentence(key: str) -> int:
+        try:
+            return int(ev.get(key, -1))
+        except (TypeError, ValueError):
+            return -1
+
+    climax, reaction, hook = sentence("climax_sentence"), sentence("reaction_sentence"), sentence("hook_sentence")
     climax_s = climax if lo <= climax <= hi else None
+    reaction_s = reaction if lo <= reaction <= hi and (climax_s is None or reaction >= climax_s) else None
+    hook_s = hook if lo <= hook <= hi else s0
     if climax_s is not None:
-        # a complete story: the clip never ends before (or starts after) its climax
-        s0, s1 = min(s0, climax_s), max(s1, climax_s)
+        # a complete mini conversation: the clip never ends before its climax or the reaction to it
+        s1 = max(s1, climax_s, reaction_s if reaction_s is not None else climax_s)
         flags = [f for f in flags if f != "ends_before_payoff"]  # that is fixed now
     elif climax == -1 and "no_climax" not in flags:
         flags.append("no_climax")
+    s0, s1 = min(s0, hook_s), max(s1, hook_s)  # the clip starts on (or just before) the hook
     verdict = str(ev.get("verdict", "maybe")).lower()
     category = str(ev.get("category") or c.category or "other").lower()
     return {
         "scores": scores,
         "flags": flags,
+        "hook_s": hook_s,
         "climax_s": climax_s,
+        "reaction_s": reaction_s,
         "verdict": verdict if verdict in VERDICTS else "maybe",
         "s0": s0,
         "s1": s1,

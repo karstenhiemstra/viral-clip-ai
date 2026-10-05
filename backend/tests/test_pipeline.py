@@ -26,7 +26,8 @@ def _assert_valid_output(out, rs):
         assert overlap <= 0.35 * min(a1 - a0, b1 - b0) + 1e-6
     for p in out.plans:
         assert 0 <= p.viral_score <= 100
-        assert p.window.duration <= rs.clips.max_seconds + 4.5
+        assert rs.clips.min_seconds - 0.05 <= p.window.duration <= rs.clips.max_seconds + 1e-6  # always 10-15 s
+        assert p.window.end - p.window.start <= rs.clips.max_seconds + 1e-6
         assert p.words and p.text
         assert set(p.scores) >= {"hook", "retention", "shareability"}
     scores = [p.viral_score for p in out.plans]

@@ -342,9 +342,9 @@ function SettingsForm({ data, mutate }: { data: SettingsPayload; mutate: (p: Set
       <Card>
         <CardHeader title="Clips & captions" subtitle="Zo kort mogelijk, maar lang genoeg voor hook én payoff." action={actions("clips")} />
         <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
-          <Field label="Minimale duur (sec)"><Input type="number" min={3} value={s.clips.min_seconds} onChange={(e) => update("clips", { min_seconds: Number(e.target.value) })} /></Field>
-          <Field label="Maximale duur (sec)"><Input type="number" min={5} value={s.clips.max_seconds} onChange={(e) => update("clips", { max_seconds: Number(e.target.value) })} /></Field>
-          <Field label="Doelduur (sec)"><Input type="number" min={3} value={s.clips.target_seconds} onChange={(e) => update("clips", { target_seconds: Number(e.target.value) })} /></Field>
+          <Field label="Minimale duur (sec)" hint="Clips duren altijd 10–15 seconden"><Input type="number" min={10} max={15} value={s.clips.min_seconds} onChange={(e) => update("clips", { min_seconds: Number(e.target.value) })} /></Field>
+          <Field label="Maximale duur (sec)"><Input type="number" min={10} max={15} value={s.clips.max_seconds} onChange={(e) => update("clips", { max_seconds: Number(e.target.value) })} /></Field>
+          <Field label="Doelduur (sec)"><Input type="number" min={10} max={15} value={s.clips.target_seconds} onChange={(e) => update("clips", { target_seconds: Number(e.target.value) })} /></Field>
           <Field label="Max clips per video"><Input type="number" min={1} max={30} value={s.clips.max_per_video} onChange={(e) => update("clips", { max_per_video: Number(e.target.value) })} /></Field>
         </div>
         <div className="grid max-w-3xl grid-cols-2 gap-3 px-5 sm:grid-cols-4">

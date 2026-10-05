@@ -287,10 +287,10 @@ function CreatorSettingsModal({ creator, onClose, onSaved, onRemove }: { creator
           </Select>
         </Field>
         <Field label="Clipduur min (sec)" hint="Leeg = globale instelling">
-          <Input type="number" min={3} value={c.clip_min_seconds ?? ""} onChange={(e) => setForm({ ...form, clip_min_seconds: num(e.target.value) })} />
+          <Input type="number" min={10} max={15} value={c.clip_min_seconds ?? ""} onChange={(e) => setForm({ ...form, clip_min_seconds: num(e.target.value) })} />
         </Field>
         <Field label="Clipduur max (sec)">
-          <Input type="number" min={5} value={c.clip_max_seconds ?? ""} onChange={(e) => setForm({ ...form, clip_max_seconds: num(e.target.value) })} />
+          <Input type="number" min={10} max={15} value={c.clip_max_seconds ?? ""} onChange={(e) => setForm({ ...form, clip_max_seconds: num(e.target.value) })} />
         </Field>
         <Field label="Max clips per video">
           <Input type="number" min={1} max={30} value={c.max_clips_per_video ?? ""} onChange={(e) => setForm({ ...form, max_clips_per_video: num(e.target.value) })} />

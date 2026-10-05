@@ -25,19 +25,20 @@ def _srt_from_lines(lines):
 def test_health_and_settings(client):
     assert client.get("/api/health").json()["ok"] is True
     data = client.get("/api/settings").json()
-    assert data["settings"]["clips"]["min_seconds"] == 12
-    assert data["settings"]["clips"]["max_seconds"] == 18
+    assert data["settings"]["clips"]["min_seconds"] == 10
+    assert data["settings"]["clips"]["max_seconds"] == 15
     assert data["system"]["llm"]["provider"] == "heuristic"
     assert len(data["meta"]["dimensions"]) == 15
 
-    r = client.patch("/api/settings", json={"clips": {"min_seconds": 10, "max_seconds": 20}, "scoring": {"weights": {"hook": 3}}})
+    r = client.patch("/api/settings", json={"clips": {"min_seconds": 11, "max_seconds": 20}, "scoring": {"weights": {"hook": 3}}})
     assert r.status_code == 200
     body = r.json()["settings"]
-    assert body["clips"]["max_seconds"] == 20 and body["scoring"]["weights"]["hook"] == 3
+    assert body["clips"]["max_seconds"] == 15  # clips are always 10-15 s
+    assert body["clips"]["min_seconds"] == 11 and body["scoring"]["weights"]["hook"] == 3
     assert body["scoring"]["weights"]["humor"] == 1.0  # untouched weights keep defaults
     assert client.patch("/api/settings", json={"clips": {"min_seconds": 1}}).status_code == 422
     assert client.patch("/api/settings", json={"nope": {}}).status_code == 422
-    assert client.post("/api/settings/reset/clips").json()["settings"]["clips"]["max_seconds"] == 18
+    assert client.post("/api/settings/reset/clips").json()["settings"]["clips"]["max_seconds"] == 15
 
 
 def test_secrets_are_masked_and_never_returned(client):

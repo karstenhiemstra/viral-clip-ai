@@ -47,12 +47,12 @@ WHAT MAKES A MOMENT WORK - judge it as someone scrolling TikTok with zero contex
 - Emotion: laughter, anger, shock, excitement, awkwardness, sincerity or vulnerability.
 - Discussion or share value: hot takes, controversial opinions, relatable situations, "send this to a friend" moments, quotable one-liners.
 
-EVERY CLIP IS A COMPLETE MINI STORY
-build-up -> tension/context -> CLIMAX/PAYOFF -> (short reaction). The climax can be a punchline, a surprising statement, a reaction, a reveal, an event, the peak of a conflict, an emotional moment, a twist or a visual event (people screaming, laughing, a fail).
-- Find the climax first, then choose the span around it: start early enough that a stranger understands what is going on (include the setup sentence; start a few seconds earlier when the clip would otherwise start mid-story), end AT the climax or shortly after it (the reaction of the people present may stay in).
-- Look ahead: the first interesting line is often only the set-up. Read the sentences after it - the punchline, the answer, the reveal or the big reaction often comes a few seconds later. Never end before it: a clip that stops just before the payoff is a failure (a cliffhanger without payoff).
-- If several people react, keep their reactions until the peak of the reaction, then cut.
-- Length: a complete story beats an exact length. 17 seconds with the payoff is better than 14 seconds that stops before it, but do not add anything after the reaction.
+EVERY CLIP IS A COMPLETE MINI CONVERSATION (normally 10-15 seconds)
+HOOK (in the first 2 seconds) -> context -> REACTION / OUTCOME. Look for short, complete conversations or mini stories, not loose interesting sentences or half conversations.
+- The hook is the reason to keep watching and must start within the first 2 seconds: a striking statement, a question, a reaction or an unexpected event. start_sentence is the hook sentence (or a very short line right before it). If the interesting statement only comes after 8 seconds, that is not a good clip: choose a span that starts much closer to it.
+- Then the context and above all the reaction / outcome must be inside the same clip. When someone says something another person reacts to, the reaction is part of the clip. Example: one person says that someone is a triplet -> the clip must also contain the other person's reaction to it, the whole mini conversation.
+- The payoff can be a punchline, a surprising answer, a reaction, a reveal, an event, the peak of a conflict, an emotional moment or a twist. Look ahead: the reaction often comes a few seconds after the statement. Never end before it and never cut in the middle of a sentence, a thought or a reaction; end right after the reaction.
+- Length: within the requested clip length (hard minimum and maximum). A moment whose hook, context and reaction do not fit in the maximum, or that has no clear payoff, is not a clip.
 
 AVOID
 - Intros, greetings, "today we are going to...", sponsor reads, merch, outros and calls to subscribe.
@@ -121,7 +121,7 @@ def candidate_user_prompt(
 ) -> str:
     lines = [
         f'VIDEO: "{title}" by {creator or "unknown creator"} (total length {fmt_ts(duration)}).',
-        f"Target clip length: {min_seconds:g}-{max_seconds:g} seconds (short is good as long as the build-up and the payoff fit; a few seconds longer is fine to complete the story).",
+        f"Clip length: at least {min_seconds:g} and at most {max_seconds:g} seconds (hard limits), hook in the first 2 seconds, reaction included.",
         f"Output language for description and reason: {language_name(output_language)}.",
     ]
     if chunk:
@@ -172,11 +172,13 @@ scores: every dimension from 0 to 100. Be strict and calibrated:
   buildup: is there a clear build-up towards the climax (setup, rising tension, anticipation)? A clip that starts at or after the climax scores low.
   ending: how strong is the last moment? Ending on the climax or right after the reaction is 80+. Ending before the climax, on filler, or mid-thought scores below 30.
   standalone: does it work as a complete mini story on its own (beginning, climax, conclusion), for someone who never saw the video?
-THE STORY ARC: a good clip is build-up -> tension/context -> CLIMAX/PAYOFF -> (short reaction). The climax can be a punchline, surprising statement, reaction, reveal, event, conflict peak, emotional moment, twist or visual event.
+THE MINI CONVERSATION: a good clip is HOOK (first 2 seconds) -> context -> REACTION / OUTCOME, complete within the length limits. The climax/payoff can be a punchline, surprising statement or answer, reaction, reveal, event, conflict peak, emotional moment or twist. When someone says something another person reacts to, that reaction belongs in the clip (one person says someone is a triplet -> the other person's reaction must be in it too).
+hook_sentence: the id of the sentence with the hook - it must start within the first 2 seconds of the edited clip.
 climax_sentence: the id of the sentence where the climax/payoff happens (it may be in CONTEXT AFTER or CONTEXT BEFORE). Look ahead: the first interesting line is often only the set-up; check the CONTEXT AFTER sentences for the punchline, answer, reveal or big reaction that follows it. -1 only if there is no climax at all.
+reaction_sentence: the id of the LAST sentence of the reaction to the climax (another person replying, laughing, shouting), -1 if nobody reacts.
 flags: only the ones that apply - needs_context, inside_joke, starts_mid_sentence, ends_mid_sentence, weak_payoff, sponsor_or_ad, intro_or_outro, low_energy, repetitive, sensitive, ends_before_payoff (the climax or reaction happens after the clip as shown), no_climax (nothing pays off), starts_mid_story (opens in the middle of a story a stranger cannot follow).
 verdict: skip, maybe, good or great.
-start_sentence / end_sentence: the best edit. You may tighten, or extend into the CONTEXT sentences when the setup or payoff lives there. The edit must CONTAIN the climax_sentence: end at the climax or shortly after it (a short reaction may stay), never before it. Start where the story becomes understandable: drop greetings and filler, but keep the setup a stranger needs (start a few seconds earlier rather than mid-story). Keep it inside one story (never run into the next topic). Aim for the target length, but a complete story beats an exact length: a clip with its payoff may run longer (up to the maximum story length), one that stops before the payoff is a failure. Never add anything after the reaction.
+start_sentence / end_sentence: the best edit, within the hard minimum and maximum of the target length. Start ON the hook (at most a very short line before it): the viewer must understand within 2 seconds why to keep watching. You may tighten, or extend into the CONTEXT sentences when the payoff or reaction lives there. The edit must CONTAIN the climax_sentence and the reaction_sentence and end right after the reaction - never before it, never in the middle of a sentence, thought or reaction. Keep it inside one story (never run into the next topic). If hook -> context -> reaction does not fit in the maximum length, or there is no clear payoff, give verdict skip. If the interesting statement only comes after 8 seconds of the clip, start later or give verdict skip.
 category: the main type of moment.
 Packaging, written in the requested output language:
   title: a short on-screen hook text for the post (max 70 characters, no hashtags, no false claims).
@@ -210,7 +212,9 @@ def _evaluation_schema() -> dict[str, Any]:
                         "verdict": {"type": "string", "enum": list(VERDICTS)},
                         "start_sentence": {"type": "integer"},
                         "end_sentence": {"type": "integer"},
+                        "hook_sentence": {"type": "integer"},
                         "climax_sentence": {"type": "integer"},
+                        "reaction_sentence": {"type": "integer"},
                         "category": {"type": "string", "enum": list(CATEGORIES)},
                         "title": {"type": "string"},
                         "why": {"type": "string"},
@@ -219,7 +223,7 @@ def _evaluation_schema() -> dict[str, Any]:
                     },
                     "required": [
                         "id", "first_seconds", "viewer_reaction", "scores", "flags", "verdict", "start_sentence",
-                        "end_sentence", "climax_sentence", "category", "title", "why", "hook_line", "emphasis_words",
+                        "end_sentence", "hook_sentence", "climax_sentence", "reaction_sentence", "category", "title", "why", "hook_line", "emphasis_words",
                     ],
                     "additionalProperties": False,
                 },
@@ -242,14 +246,12 @@ def evaluator_user_prompt(
     max_seconds: float,
     target_seconds: float,
     blocks: list[str],
-    story_max_seconds: float | None = None,
 ) -> str:
-    story_max = story_max_seconds or max_seconds
     head = [
         f'VIDEO: "{title}" by {creator or "unknown creator"}.',
         f"Output language for title, why, hook_line: {language_name(output_language)}.",
-        f"Target clip length: {min_seconds:g}-{max_seconds:g} seconds, ideally about {target_seconds:g} seconds"
-        f" (maximum story length {story_max:g} seconds, only when that is needed to reach the payoff).",
+        f"Target clip length: at least {min_seconds:g} and at most {max_seconds:g} seconds (hard limits), ideally about"
+        f" {target_seconds:g} seconds; hook within the first 2 seconds, the reaction included.",
         "",
     ]
     return "\n".join(head + blocks + ["", "Evaluate every candidate above."])

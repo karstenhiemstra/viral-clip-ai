@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.ai.boundaries import ClipWindow, DurationRules, optimize_boundaries
+from app.ai.boundaries import REJECT_FLAGS, ClipWindow, DurationRules, optimize_boundaries
 from app.ai.candidates import Candidate, llm_candidates, merge_candidates, signal_candidates
 from app.ai.dedupe import mmr_select, similarity_matrix
 from app.ai.evaluator import (
@@ -49,7 +49,7 @@ from app.ai.vision import LLMVisionAnalyzer, blend_vision
 from app.models import Creator, Transcript, Video
 from app.services import learning
 from app.services.queue import JobWaiting
-from app.services.settings_store import RuntimeSettings
+from app.services.settings_store import CLIP_MAX_SECONDS, CLIP_MIN_SECONDS, RuntimeSettings
 from app.services.storage import get_storage
 from app.video import ffmpeg
 from app.video.audio_features import AudioProfile, load_profile
@@ -97,11 +97,23 @@ class AnalysisOutput:
     warnings: list[str]
 
 
+# The AI's own verdict that nothing pays off (or the payoff falls outside the clip): rejected too.
+AI_REJECT_FLAGS = ("no_climax", "ends_before_payoff")
+REJECT_LABELS_NL = {
+    "hook_late": "hook niet in de eerste 2 seconden",
+    "incomplete_story": "climax of reactie past niet in de clip",
+    "too_short": "korter dan de minimale duur",
+    "no_climax": "geen duidelijke payoff",
+    "ends_before_payoff": "stopt vóór de payoff",
+}
+
+
 def duration_rules(rs: RuntimeSettings, creator: Creator | None) -> DurationRules:
     c = rs.clips
     lo = creator.clip_min_seconds if creator and creator.clip_min_seconds else c.min_seconds
     hi = creator.clip_max_seconds if creator and creator.clip_max_seconds else c.max_seconds
-    hi = max(hi, lo)
+    lo = min(max(lo, CLIP_MIN_SECONDS), CLIP_MAX_SECONDS)  # clips are always 10-15 s
+    hi = min(max(hi, lo), CLIP_MAX_SECONDS)
     target = min(max(c.target_seconds, lo), hi) if not (creator and (creator.clip_min_seconds or creator.clip_max_seconds)) else (lo + hi) / 2
     return DurationRules(
         min_seconds=lo, max_seconds=hi, target_seconds=target, remove_silences=c.remove_silences,
@@ -250,7 +262,6 @@ def analyze_video(
             evaluated_by_llm = evaluate_llm(
                 llm, ctx, shortlist, min_s=rules.min_seconds, max_s=rules.max_seconds, target_s=rules.target_seconds,
                 output_language=lang, batch_size=rs.pipeline.detail_batch_size, meter=meter,
-                story_max_s=rules.max_seconds + rules.tolerance,
                 progress=lambda f: report(50 + 30 * f, "Pass 3 (slim model): kandidaten beoordelen"), warnings=warnings,
             )
         except LLMFatalError as e:
@@ -265,12 +276,14 @@ def analyze_video(
     report(82, "Clipgrenzen optimaliseren en scoren")
     model = learning.active_model(db) if rs.scoring.personalization_strength > 0 else None
     plans: list[ClipPlan] = []
+    rejected: dict[str, list[str]] = {}
     for c in shortlist:
         ev = c.evaluation or {}
         llm_mode = ev.get("mode") == "llm"
         window = optimize_boundaries(
-            ctx, ev.get("s0", c.s0), ev.get("s1", c.s1), rules, hook_s=None if llm_mode else c.hook_s,
-            climax_s=ev.get("climax_s") if llm_mode else None,
+            ctx, ev.get("s0", c.s0), ev.get("s1", c.s1), rules, hook_s=ev.get("hook_s") if llm_mode else c.hook_s,
+            climax_s=ev.get("climax_s") if llm_mode else None, reaction_s=ev.get("reaction_s") if llm_mode else None,
+            heuristic=not llm_mode,
         )
         clip_words = ctx.words[window.w0 : window.w1]
         feats = window_features(ctx, window.start, window.end, clip_words)
@@ -282,6 +295,12 @@ def analyze_video(
         if feats.get("payoff_after_end"):  # the audio: the big reaction comes right after the cut
             flags.add("ends_before_payoff")
         flags = sorted(flags)
+        # Not a complete mini conversation within the limits (hook too late, payoff/reaction left out, too
+        # short) or, according to the AI, no payoff at all: rejected, whatever its score.
+        reasons = [f for f in flags if f in REJECT_FLAGS or (llm_mode and f in AI_REJECT_FLAGS)]
+        if reasons:
+            rejected[c.cid] = reasons
+            continue
         if not llm_mode:  # packaging must describe the final (possibly moved) window
             ev = {**ev, **heuristic_packaging(ctx, clip_words, feats, c.category)}
         category = ev.get("category") or c.category or "other"
@@ -335,7 +354,17 @@ def analyze_video(
                 },
             )
         )
-    mark("scoring", plans=len(plans))
+    mark("scoring", plans=len(plans), rejected=len(rejected))
+    if rejected:
+        counts: dict[str, int] = {}
+        for reasons in rejected.values():
+            for r in reasons:
+                counts[r] = counts.get(r, 0) + 1
+        warnings.append(
+            f"{len(rejected)} kandidaat-clip(s) afgewezen omdat ze geen compleet mini-gesprek van "
+            f"{rules.min_seconds:g}-{rules.max_seconds:g} s vormen: "
+            + ", ".join(f"{REJECT_LABELS_NL.get(k, k)} ({v})" for k, v in sorted(counts.items()))
+        )
 
     # 6. optional vision pass on the best few ---------------------------------------------------------
     if rs.pipeline.use_vision and llm is not None and media is not None and video.media_meta.get("has_video", True):
@@ -395,6 +424,8 @@ def analyze_video(
                 viral_score=p.viral_score, final_start=p.window.start, final_end=p.window.end,
                 selected=c.cid in selected_ids, verdict=p.extra.get("verdict"), why=p.why, category=p.category,
             )
+        elif c.cid in rejected:
+            row.update(selected=False, note="afgewezen: " + ", ".join(REJECT_LABELS_NL.get(r, r) for r in rejected[c.cid]))
         else:
             row.update(selected=False, note="niet in shortlist")
         log_rows.append(row)

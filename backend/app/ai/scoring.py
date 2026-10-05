@@ -46,8 +46,8 @@ STAGES: dict[str, tuple[str, ...]] = {
 FLAG_PENALTIES: dict[str, float] = {
     "needs_context": 0.85,
     "inside_joke": 0.9,
-    "starts_mid_sentence": 0.93,
-    "ends_mid_sentence": 0.93,
+    "starts_mid_sentence": 0.85,
+    "ends_mid_sentence": 0.8,  # cut in the middle of a sentence, thought or reaction
     "weak_payoff": 0.92,
     "sponsor_or_ad": 0.55,
     "intro_or_outro": 0.6,

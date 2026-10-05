@@ -1,6 +1,6 @@
 # 🔥 ViralClip AI
 
-**Vindt automatisch de momenten met het hoogste viral potential in lange YouTube-video's en zet ze klaar als verticale TikTok/Reels/Shorts-clips (9:16, captions, 12–18 sec).**
+**Vindt automatisch de momenten met het hoogste viral potential in lange YouTube-video's en zet ze klaar als verticale TikTok/Reels/Shorts-clips (9:16, captions, 10–15 sec: complete mini-gesprekken met de hook in de eerste 2 seconden).**
 
 Je voegt creators toe (bijv. Enzo Knol, Bankzitters, Hanwe, Gio, StukTV — of elk ander kanaal). ViralClip AI controleert elke 2 uur of er nieuwe video's zijn, kiest de interessantste, analyseert het transcript en de audio, laat een AI denken als *een TikTok-kijker die aan het scrollen is*, geeft elk moment een **Viral Score (0–100)**, verwijdert dubbele momenten, kiest een start die meteen pakt (hook-first), rendert een verticale clip met captions en zet alles in een dashboard met preview, uitleg en downloadknop. Jouw feedback (🔥 / 👍 / 👎 / ❌) traint een persoonlijk model dat de score bijstuurt.
 

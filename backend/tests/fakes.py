@@ -41,7 +41,7 @@ class FakeLLM:
                     {
                         "id": cid, "first_seconds": "Wacht wat", "viewer_reaction": "Ik blijf kijken",
                         "scores": dict.fromkeys(DIMENSIONS, base), "flags": [] if hot else ["weak_payoff"],
-                        "verdict": "great" if hot else "maybe", "start_sentence": ids[0], "end_sentence": ids[-1], "climax_sentence": ids[-1],
+                        "verdict": "great" if hot else "maybe", "start_sentence": ids[0], "end_sentence": ids[-1], "hook_sentence": ids[0], "climax_sentence": ids[-1], "reaction_sentence": -1,
                         "category": "reaction", "title": "Dit geloof je niet", "why": "Sterke hook en payoff.",
                         "hook_line": "Wacht wat", "emphasis_words": ["banaan", "miljoen", "nietbestaand"],
                     }

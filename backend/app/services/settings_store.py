@@ -76,10 +76,15 @@ class ScoringSettings(BaseModel):
         return merged
 
 
+# Every clip is a complete mini conversation of 10-15 seconds: hard limits for all settings and creators.
+CLIP_MIN_SECONDS = 10.0
+CLIP_MAX_SECONDS = 15.0
+
+
 class ClipSettings(BaseModel):
-    min_seconds: float = Field(12, ge=3, le=120)
-    max_seconds: float = Field(18, ge=5, le=180)
-    target_seconds: float = Field(15, ge=3, le=180)
+    min_seconds: float = Field(CLIP_MIN_SECONDS, ge=3, le=120)
+    max_seconds: float = Field(CLIP_MAX_SECONDS, ge=5, le=180)
+    target_seconds: float = Field(13, ge=3, le=180)
     max_per_video: int = Field(5, ge=1, le=30)
     remove_silences: bool = True
     silence_min_gap: float = Field(0.6, ge=0.2, le=3.0)  # pauses longer than this get shortened
@@ -89,6 +94,10 @@ class ClipSettings(BaseModel):
 
     @model_validator(mode="after")
     def _order(self) -> ClipSettings:
+        if (self.min_seconds, self.max_seconds) == (12, 18):  # the old default range, saved with other settings
+            self.min_seconds, self.max_seconds, self.target_seconds = CLIP_MIN_SECONDS, CLIP_MAX_SECONDS, 13
+        self.min_seconds = min(max(self.min_seconds, CLIP_MIN_SECONDS), CLIP_MAX_SECONDS)
+        self.max_seconds = min(max(self.max_seconds, CLIP_MIN_SECONDS), CLIP_MAX_SECONDS)
         if self.max_seconds < self.min_seconds:
             self.max_seconds = self.min_seconds
         self.target_seconds = min(max(self.target_seconds, self.min_seconds), self.max_seconds)

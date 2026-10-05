@@ -181,6 +181,12 @@ def punchline_hits(words: list[Word]) -> int:
     return category_hits(_tokens(words), " ".join(w.text for w in words))["humor"]
 
 
+def reaction_hits(words: list[Word]) -> int:
+    """Words that make a short line a reaction ("Wat?!", "Echt?", "Nee joh!", "hahaha", "wow")."""
+    hits = category_hits(_tokens(words), " ".join(w.text for w in words))
+    return hits["humor"] + hits["surprise"] + hits["question"] + hits["intensity"]
+
+
 def strong_token(tok: str) -> bool:
     if any(tok in LEXICON[c] for c in STRONG_CATEGORIES):
         return True
