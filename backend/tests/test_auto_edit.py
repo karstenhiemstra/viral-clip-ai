@@ -9,7 +9,7 @@ import pytest
 
 from app.config import get_settings
 from app.edit.analysis import analyze_footage, detect_beats
-from app.edit.editor import build_plan, match_score, parse_prompt
+from app.edit.editor import build_plan, match_score, parse_prompt, source_seconds
 from app.models import ApiUsage, Job, JobType, Video, VideoStatus
 from app.video import ffmpeg
 from app.worker.runner import Worker
@@ -101,12 +101,16 @@ def test_cuts_follow_the_beat_and_regenerating_varies_the_edit(footage, tmp_path
     start = plan["music"]["start"]
     cuts = np.cumsum([s["out"] for s in plan["shots"]])[:-1] + start
     assert all(np.min(np.abs(music.beats - c)) < 0.02 for c in cuts), "every cut on a beat"
-    assert abs(plan["duration"] - 8.0) < 0.6 and len(plan["shots"]) >= 6
+    assert abs(plan["duration"] - 8.0) < 1.0 and 2 <= len(plan["shots"]) <= 6  # fewer, complete actions
+    for shot in plan["shots"]:  # never half an action: the shot shows all of it
+        if shot.get("action"):
+            assert shot["start"] <= shot["action"][0] + 1e-6
+            assert shot["start"] + source_seconds(shot) >= shot["action"][1] - 0.05
     other = build_plan("Neymar", "hype", 8.0, [fx], seed=2, music=music)
     key = lambda p: [(s["start"], s["out"], s["transition"], s["zoom"]) for s in p["shots"]]  # noqa: E731
     assert key(other) != key(plan)
     no_music = build_plan("Neymar", "hype", 8.0, [fx], seed=1, music=None)
-    assert no_music["music"] is None and abs(no_music["duration"] - 8.0) < 0.01
+    assert no_music["music"] is None and abs(no_music["duration"] - 8.0) < 1.5
 
 
 def _frame(path: Path, t: float) -> np.ndarray:
@@ -191,6 +195,8 @@ def test_make_an_edit_of_neymar_end_to_end(client, db, footage, tmp_path, music_
     assert r.status_code == 200, r.text
     e2 = _ready(client, e["id"])
     assert e2["version"] == e["version"] + 1 and e2["result"]["music"] is None
+    # the player track and the strongest moment of each clip survive a manual change
+    assert all(s2.get("framing") == s1.get("framing") and s2.get("peak") == s1.get("peak") for s1, s2 in zip(shots, e2["plan"]["shots"], strict=True))
     out2 = _download(client, e2, tmp_path, "edit2.mp4")
     assert abs(ffmpeg.probe(out2).duration - 4.5) < 0.2
     # the white flash is really in the video at the start of the 2nd shot, and the freeze frame is still
@@ -210,9 +216,10 @@ def test_cinematic_edit_has_letterbox_and_regenerate_makes_another(client, foota
     e = _ready(client, r.json()["id"])
     assert e["style"] == "cinematic" and e["style_auto"] is False
     assert "letterbox" in e["result"]["effects"] and "colour_grade" in e["result"]["effects"]
-    f = _frame(_download(client, e, tmp_path), 3.0)
-    assert f[:150].mean() < 12 and f[-150:].mean() < 12, "black bars top and bottom"
-    assert f[600:1300].mean() > 25
+    video = _download(client, e, tmp_path)
+    frames = [_frame(video, t) for t in (1.0, 2.5, 4.0, 5.5)]
+    assert all(f[:150].mean() < 12 and f[-150:].mean() < 12 for f in frames), "black bars top and bottom"
+    assert max(f[600:1300].mean() for f in frames) > 25
     first = [(s["start"], s["out"]) for s in e["plan"]["shots"]]
     r = client.post(f"/api/edits/{e['id']}/regenerate")
     assert r.status_code == 200 and r.json()["status"] == "queued"

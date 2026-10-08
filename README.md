@@ -212,7 +212,17 @@ Typ op de pagina **Auto Edit** bijvoorbeeld *"Maak een edit van Neymar"* of *"Ma
 3. **Stijlen:** Hype, Cinematic, Fast / Aggressive, Clean en Football Edit. Noem je geen stijl, dan kiest de editor zelf (voetballers → Football Edit, anders Hype).
 4. **Resultaat:** een preview (1080×1920 MP4, standaard 15 s), met **Opnieuw genereren** (andere momenten, timing en effecten), **Download** en **Edit aanpassen** (volgorde, verwijderen, inkorten, transitie, zoom/shake/slow-mo/freeze, muziek aan/uit).
 
-Hoe het werkt: de beelden worden geanalyseerd op beweging, cameracuts, waar de actie in beeld is en hoe hard het geluid is (eenmalig, daarna uit de cache). De beste momenten komen aan het begin en het einde. Effecten: snelle cuts op de beat, zoom in/uit, punch-in, camera shake, speed ramps, slow motion (met frame blending), motion blur, flits-, zoom-, whip-, glitch- en fade-transities, freeze frames, kleurgrading per stijl, cinema-balken (Cinematic), fade in/uit en de naam als titel.
+Hoe het werkt (volledig lokaal, met FFmpeg, numpy en OpenCV):
+- **Hele acties, geen halve.** Per beeld wordt de camerabeweging eruit gerekend; wat overblijft is wat écht beweegt (speler, bal, tegenstander). Een actie is een stuk beweging met een begin en een einde binnen één camerashot: een dribbel, skillmove, sprint of schot. Elke actie komt er helemaal in, met ±0,5 s aanloop ervoor en ±0,4 s erna. Nooit midden in een beweging knippen, nooit over een camerawissel heen. Liever 5 volledige acties dan 12 halve.
+- **Kwaliteitscontrole per shot:** is de actie compleet (context ervoor en erna), is er een duidelijk bewegend onderwerp, is het niet te klein of te donker, past de actie in beeld, en is het niet (bijna) hetzelfde beeld als een eerder shot? Je ziet dit per clip bij *Edit aanpassen*.
+- **Speler en bal in beeld:** de 9:16-uitsnede volgt de actie vloeiend mee (naar links of rechts). Bij een kleine speler in de verte gaat het beeld iets dichterbij; is de actie te breed voor 9:16 (een lange pass), dan zie je het hele beeld op een vervaagde achtergrond. Statische beelden zoals het scorebord tellen niet mee.
+- **Rustig en professioneel:** de sterkste actie opent de edit, de op één na sterkste sluit af. De meeste overgangen zijn clean cuts; hooguit één opvallend effect per shot en nooit twee drukke shots na elkaar. Slow motion, een speed ramp, een punch-in of een korte shake komen op het sterkste moment van een actie zelf.
+- **Timing:** met muziek vallen de cuts op de beat. Dat wordt bereikt door een actie iets meer of minder context te geven, nooit door de actie af te knippen.
+- **Tekst:** de naam verschijnt alleen aan het einde (op het laatste shot), nooit op het eerste shot. Uit te zetten met *Naam als tekst*.
+
+Effecten: cuts op de beat, zoom (subtiel of punch-in), korte shake bij een impactmoment, speed ramp, slow motion (met frame blending), motion blur, flits-, zoom-, whip-, glitch- en fade-overgangen, freeze frames, kleurgrading per stijl, cinema-balken (Cinematic) en fade in/uit.
+
+Beperking: er is geen herkenning van wie de speler is of waar precies de bal is. De editor houdt het bewegende deel van het beeld (speler, bal en tegenstander samen) in beeld.
 
 ---
 

@@ -115,7 +115,7 @@ def run_edit_job(ctx: JobContext) -> str:
                 ctx.progress(42, "plan", "Edit plannen (shots, beats, effecten)")
                 music = _music(edit, rng)
                 edit.plan = build_plan(edit.subject, edit.style, edit.duration, footage, edit.seed, music=music,
-                                       music_enabled=edit.music)
+                                       music_enabled=edit.music, text=edit.show_title)
                 db.commit()
             plan = edit.plan
             music_path = None

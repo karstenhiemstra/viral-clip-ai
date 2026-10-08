@@ -1,10 +1,16 @@
 """Render an edit plan to a vertical 1080x1920 MP4 with ffmpeg only.
 
-Every shot (or both halves of a speed ramp) is rendered to its own short file with its effects:
-speed (slow motion with frame blending, fast parts with motion blur), a 9:16 crop aimed at the action (or the
-whole frame on a blurred background), zoom in/out/punch, camera shake, the colour grade of the style, an entry
-transition (white flash, zoom punch, whip pan, glitch, dip to black) and a freeze frame. A final pass joins
-the shots exactly (concat filter), puts the music under it (or the original sound), adds the title and fades.
+Every shot (or every speed part of it: normal, a speed ramp, slow motion at the strongest moment) is rendered
+to its own short file:
+- framing: a 9:16 crop that FOLLOWS the action (the keyframes of the plan, interpolated per frame), a little
+  closer for far-away action, or the whole frame on a blurred background when the action is too wide;
+- speed: slow motion with frame blending, fast parts with motion blur;
+- effects at the moment itself: a short punch-in or a short shake at the strongest moment of the action,
+  a subtle slow zoom on calm shots;
+- the colour grade of the style, the entry transition (clean cut, or now and then a flash, zoom punch, whip
+  pan, glitch or dip) and a freeze frame.
+A final pass joins the shots exactly (concat filter), puts the music under it (or the original sound), adds
+the name on the LAST shot (never the first) and fades.
 """
 
 from __future__ import annotations
@@ -15,28 +21,49 @@ from collections.abc import Callable
 from pathlib import Path
 
 from app.config import get_settings
-from app.edit.editor import STYLES, Style
+from app.edit.editor import STYLES, Style, shot_parts, source_seconds
 from app.video import ffmpeg
 
 log = logging.getLogger(__name__)
 
 OUT_W, OUT_H, FPS = 1080, 1920, 30
 ZP_SCALE = 1.25  # zoom/shake work on a slightly larger frame (smooth sub-pixel motion)
-RAMP = ((0.55, 1.7), (0.45, 0.45))  # a speed ramp: 55% of the shot fast, then 45% in slow motion
 
 
 def _frames(seconds: float) -> int:
     return max(1, int(round(seconds * FPS)))
 
 
-def _crop(cx: float, w: int, h: int) -> str:
-    """The 9:16 part of the frame around the action (``cx`` = 0..1 horizontal position)."""
+def _piecewise(points: list[tuple[float, float]]) -> str:
+    """Linear interpolation between (t, value) keyframes as an ffmpeg expression of t."""
+    if len(points) == 1:
+        return f"{points[0][1]:.1f}"
+    expr = f"{points[-1][1]:.1f}"
+    for (t0, v0), (t1, v1) in reversed(list(zip(points, points[1:], strict=False))):
+        if t1 - t0 < 1e-3:
+            continue
+        expr = f"if(lt(t,{t1:.3f}),{v0:.1f}+({v1 - v0:.1f})*(t-{t0:.3f})/{t1 - t0:.3f},{expr})"
+    return expr
+
+
+def crop_filter(shot: dict, w: int, h: int, *, src_offset: float = 0.0, speed: float = 1.0) -> str:
+    """The 9:16 part of the frame that follows the action. ``src_offset``/``speed`` map the time of this part
+    of the shot back to the footage, so the crop follows the plan's keyframes (seconds from the shot start)."""
+    framing = shot.get("framing") or {}
+    zoom = max(1.0, float(framing.get("zoom") or 1.0))
     if w / h > 9 / 16:
-        cw = min(w, int(round(h * 9 / 16 / 2)) * 2)
-        x = int(min(max(cx * w - cw / 2, 0), w - cw))
-        return f"crop={cw}:{h}:{x}:0"
-    ch = min(h, int(round(w * 16 / 9 / 2)) * 2)
-    return f"crop={w}:{ch}:0:{(h - ch) // 2}"
+        ch = h / zoom
+        cw = ch * 9 / 16
+    else:
+        cw = w / zoom
+        ch = min(h, cw * 16 / 9)
+    cw, ch = int(round(cw / 2)) * 2, int(round(ch / 2)) * 2
+    track = framing.get("track") or [[0.0, float(shot.get("cx", 0.5)), 0.5]]
+    xs = [((t - src_offset) / speed, cx * w - cw / 2) for t, cx, _ in track]
+    ys = [((t - src_offset) / speed, cy * h - ch / 2) for t, _, cy in track]
+    x = f"max(0,min({w - cw},{_piecewise(xs)}))"
+    y = f"max(0,min({h - ch},{_piecewise(ys)}))" if ch < h else "0"
+    return f"crop=w={cw}:h={ch}:x='{x}':y='{y}'"
 
 
 def _atempo(speed: float) -> str:
@@ -51,27 +78,32 @@ def _atempo(speed: float) -> str:
     return ",".join(parts)
 
 
-def _zoompan(shot: dict, style: Style, first: bool, off: int, total: int) -> str | None:
-    """Zoom/shake/whip as a zoompan on the (1.25x) frame; None when the shot has none of them."""
+def _zoompan(shot: dict, style: Style, first: bool, off: int, total: int, peak: int) -> str | None:
+    """Subtle zoom, a punch-in or a short shake AT the strongest moment (frame ``peak``), and the zoom/whip
+    entry transitions, as a zoompan on the (1.25x) frame; None when the shot has none of them."""
     zoom, shake = shot.get("zoom"), bool(shot.get("shake"))
     whip = first and shot.get("transition") == "whip"
-    punch = zoom == "punch" or (first and shot.get("transition") == "zoom")
-    if not (zoom or shake or whip or punch):
+    entry_zoom = first and shot.get("transition") == "zoom"
+    if not (zoom or shake or whip or entry_zoom):
         return None
     a = style.zoom_amount
-    p = f"((on+{off})/{max(1, total)})"
+    n = f"(on+{off})"
+    p = f"({n}/{max(1, total)})"
     z = {"in": f"1+{a}*{p}", "out": f"1+{a}*(1-{p})"}.get(zoom or "", "1")
-    if punch:
-        z += "+0.24*pow(max(0,1-on/7),2)"
+    window = f"exp(-pow(({n}-{peak})/6,2))"  # ~0.4 s around the strongest moment
+    if zoom == "punch":
+        z += f"+0.14*{window}"
+    if entry_zoom:
+        z += "+0.2*pow(max(0,1-on/7),2)"
     if whip:
         z += "+0.18*max(0,1-on/6)"
     if shake:
-        z = f"({z})+0.06"
+        z += f"+0.05*{window}"
     x = "(iw-iw/zoom)/2"
     y = "(ih-ih/zoom)/2"
     if shake:
-        x += f"+(iw-iw/zoom)/2*0.55*sin((on+{off})*1.9)"
-        y += f"+(ih-ih/zoom)/2*0.55*cos((on+{off})*2.3)"
+        x += f"+(iw-iw/zoom)/2*0.6*sin({n}*1.9)*{window}"
+        y += f"+(ih-ih/zoom)/2*0.6*cos({n}*2.3)*{window}"
     if whip:
         x += "+(iw-iw/zoom)/2*max(0,1-on/6)"
     x = f"max(0,min(iw-iw/zoom,{x}))"
@@ -80,18 +112,18 @@ def _zoompan(shot: dict, style: Style, first: bool, off: int, total: int) -> str
 
 
 def segment_graph(
-    shot: dict, style: Style, w: int, h: int, *, speed: float, seconds: float, first: bool, last: bool,
-    off: int, total: int, has_audio: bool, with_music: bool,
+    shot: dict, style: Style, w: int, h: int, *, speed: float, seconds: float, moving_frames: int, first: bool,
+    last: bool, off: int, total: int, peak: int, src_offset: float, has_audio: bool, with_music: bool,
 ) -> str:
     """Filtergraph for one part of a shot: [0:v](,[0:a]) -> [v][a]."""
-    moving = seconds - (float(shot.get("freeze") or 0) if last else 0.0)
     chain = [f"setpts=(PTS-STARTPTS)/{speed:.4f}", f"framerate=fps={FPS}" if speed < 0.9 else f"fps={FPS}",
-             f"trim=end_frame={_frames(moving)}"]  # exactly the moving part; a freeze frame is added after it
+             f"trim=end_frame={moving_frames}"]  # exactly the moving part; a freeze frame is added after it
     if style.motion_blur and (speed >= 1.3 or (first and shot.get("transition") == "whip")):
         chain.append("tmix=frames=3")
-    zp = _zoompan(shot, style, first, off, total)
+    zp = _zoompan(shot, style, first, off, total, peak)
     zw, zh = int(round(OUT_W * ZP_SCALE / 2)) * 2, int(round(OUT_H * ZP_SCALE / 2)) * 2
-    if style.framing == "blur":
+    mode = (shot.get("framing") or {}).get("mode") or ("fit" if style.framing == "blur" else "crop")
+    if mode == "fit":  # the whole frame (the action is too wide for 9:16) on a blurred background
         graph = (
             f"[0:v]{','.join(chain)},split=2[b][f];"
             f"[b]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},"
@@ -101,7 +133,7 @@ def segment_graph(
         if zp:
             graph += f",scale={zw}:{zh}:flags=lanczos"
     else:
-        chain.append(_crop(float(shot.get("cx", 0.5)), w, h))
+        chain.append(crop_filter(shot, w, h, src_offset=src_offset, speed=speed))
         chain.append(f"scale={zw}:{zh}:flags=lanczos" if zp else f"scale={OUT_W}:{OUT_H}:flags=lanczos")
         graph = f"[0:v]{','.join(chain)}"
     post = ["setsar=1"]
@@ -136,26 +168,38 @@ def segment_graph(
     return graph
 
 
-def _parts(shot: dict) -> list[tuple[float, float]]:
-    """(speed, output seconds of moving picture) per part of the shot."""
-    moving = max(0.1, float(shot["out"]) - float(shot.get("freeze") or 0))
-    if shot.get("ramp"):
-        return [(speed, moving * share) for share, speed in RAMP]
-    return [(float(shot.get("speed") or 1.0), moving)]
+def _peak_frame(shot: dict, parts: list[tuple[float, float]], part_frames: list[int]) -> int:
+    """Output frame (within the shot) of its strongest moment."""
+    peak = shot.get("peak")
+    peak = float(peak) if peak is not None else source_seconds(shot) / 2
+    acc_src, acc_frames = 0.0, 0
+    for (src, speed), nfr in zip(parts, part_frames, strict=True):
+        if peak <= acc_src + src:
+            return acc_frames + int(round((peak - acc_src) / speed * FPS))
+        acc_src += src
+        acc_frames += nfr
+    return max(0, acc_frames - 1)
 
 
-def _title_ass(title: str, style: Style, duration: float) -> str:
+def title_window(shot_starts: list[float], duration: float) -> tuple[float, float]:
+    """The name appears on the LAST shot (never on the first one): from just after its start to the end."""
+    start = shot_starts[-1] + 0.15 if len(shot_starts) > 1 else max(0.8, duration - 1.6)
+    start = min(start, max(0.0, duration - 1.2))
+    return round(start, 3), round(max(start + 0.6, duration - 0.35), 3)
+
+
+def _title_ass(title: str, style: Style, start: float, end: float) -> str:
     title = title.replace("{", "(").replace("}", ")").replace("\\", "/")[:40]
     n = max(1, len(title))
     if style.title == "elegant":
-        font, bold, size, outline, shadow, spacing = "Poppins", -1, min(124, int((980 - n * 24) / (0.352 * n))), 0, 3, 24
-        tags, start, end, y = "\\fad(500,500)", 0.4, min(duration - 0.3, 2.8), OUT_H * 0.5
+        font, bold, size, outline, shadow, spacing = "Poppins", -1, min(96, int((980 - n * 22) / (0.352 * n))), 0, 3, 22
+        tags, y = "\\fad(450,400)", OUT_H * 0.8
     elif style.title == "clean":
-        font, bold, size, outline, shadow, spacing = "Poppins", -1, min(130, int(940 / (0.62 * n * 0.5675))), 0, 3, 2
-        tags, start, end, y = "\\fad(250,300)", 0.3, min(duration - 0.3, 2.4), OUT_H * 0.78
+        font, bold, size, outline, shadow, spacing = "Poppins", -1, min(104, int(940 / (0.62 * n * 0.5675))), 0, 3, 2
+        tags, y = "\\fad(250,300)", OUT_H * 0.8
     else:  # pop
-        font, bold, size, outline, shadow, spacing = "Poppins ExtraBold", 0, min(260, int(930 / (0.72 * n * 0.5675))), 8, 0, 0
-        tags, start, end, y = "\\fscx135\\fscy135\\fad(60,220)\\t(0,180,\\fscx100\\fscy100)", 0.15, min(duration - 0.3, 1.9), OUT_H * 0.42
+        font, bold, size, outline, shadow, spacing = "Poppins ExtraBold", 0, min(150, int(930 / (0.72 * n * 0.5675))), 6, 0, 0
+        tags, y = "\\fscx120\\fscy120\\fad(80,250)\\t(0,180,\\fscx100\\fscy100)", OUT_H * 0.8
 
     def ts(t: float) -> str:
         return f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{t % 60:05.2f}"
@@ -168,7 +212,7 @@ def _title_ass(title: str, style: Style, duration: float) -> str:
         f"Style: T,{font},{max(40, size)},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,{bold},0,0,0,100,100,{spacing},0,1,"
         f"{outline},{shadow},5,40,40,0,1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-        f"Dialogue: 0,{ts(start)},{ts(max(start + 0.5, end))},T,,0,0,0,,{{\\an5\\pos({OUT_W // 2},{int(y)}){tags}}}{title}\n"
+        f"Dialogue: 0,{ts(start)},{ts(end)},T,,0,0,0,,{{\\an5\\pos({OUT_W // 2},{int(y)}){tags}}}{title}\n"
     )
 
 
@@ -190,22 +234,26 @@ def render_edit(
     workdir.mkdir(parents=True, exist_ok=True)
     seg_files: list[Path] = []
     seg_seconds: list[float] = []
+    shot_starts: list[float] = []
     graphs: list[str] = []
-    total_parts = sum(len(_parts(s)) for s in shots)
+    total_parts = sum(len(shot_parts(s)) for s in shots)
     done = 0
     for si, shot in enumerate(shots):
         media, info = sources[int(shot["video_id"])]
         w, h = info.display_size or (1920, 1080)
-        parts = _parts(shot)
-        total_frames = sum(_frames(sec) for _, sec in parts)
-        src_t = float(shot.get("start", 0.0))
-        off = 0
-        for pi, (speed, moving) in enumerate(parts):
+        parts = shot_parts(shot)
+        part_frames = [_frames(src / speed) for src, speed in parts]
+        total_frames = sum(part_frames)
+        peak = _peak_frame(shot, parts, part_frames)
+        freeze = float(shot.get("freeze") or 0)
+        shot_starts.append(round(sum(seg_seconds), 3))
+        src_t, src_off, off = float(shot.get("start", 0.0)), 0.0, 0
+        for pi, ((src_len, speed), nfr) in enumerate(zip(parts, part_frames, strict=True)):
             last = pi == len(parts) - 1
-            seconds = _frames(moving + (float(shot.get("freeze") or 0) if last else 0)) / FPS
-            src_len = moving * speed
-            graph = segment_graph(shot, style, w, h, speed=speed, seconds=seconds, first=pi == 0, last=last, off=off,
-                                  total=total_frames, has_audio=info.has_audio, with_music=with_music)
+            seconds = (nfr + (_frames(freeze) if last and freeze > 0 else 0)) / FPS
+            graph = segment_graph(shot, style, w, h, speed=speed, seconds=seconds, moving_frames=nfr, first=pi == 0,
+                                  last=last, off=off, total=total_frames, peak=peak, src_offset=src_off,
+                                  has_audio=info.has_audio, with_music=with_music)
             seg = workdir / f"seg{si:03d}_{pi}.mp4"
             cmd = [ffmpeg.ffmpeg_bin(), "-y", "-v", "error", "-ss", f"{max(0.0, src_t):.3f}", "-t", f"{src_len + 0.2:.3f}",
                    "-i", str(media), "-f", "lavfi", "-t", f"{seconds:.3f}", "-i", "anullsrc=r=48000:cl=stereo",
@@ -217,11 +265,12 @@ def render_edit(
             seg_seconds.append(seconds)
             graphs.append(graph)
             src_t += src_len
-            off += _frames(moving)
+            src_off += src_len
+            off += nfr
             done += 1
             if progress:
                 progress(done / (total_parts + 1))
-    # final pass: join exactly, music or original sound, title, fades
+    # final pass: join exactly, music or original sound, the name (on the last shot), fades
     duration = round(sum(seg_seconds), 3)
     inputs: list[str] = []
     for f in seg_files:
@@ -230,12 +279,14 @@ def render_edit(
     graph = "".join(f"[{i}:v][{i}:a]" for i in range(n)) + f"concat=n={n}:v=1:a=1[vc][ac]"
     vf = []
     fonts = get_settings().fonts_dir
+    title_at = None
     if plan.get("text", True) and plan.get("title"):
+        title_at = title_window(shot_starts, duration)
         ass = workdir / "title.ass"
-        ass.write_text(_title_ass(str(plan["title"]), style, duration), encoding="utf-8")
+        ass.write_text(_title_ass(str(plan["title"]), style, *title_at), encoding="utf-8")
         fopt = f":fontsdir={ffmpeg.escape_filter_path(fonts)}" if fonts.exists() else ""
         vf.append(f"ass=filename={ffmpeg.escape_filter_path(ass)}{fopt}")
-    vf.append("fade=t=in:st=0:d=0.25")
+    vf.append("fade=t=in:st=0:d=0.2")
     vf.append(f"fade=t=out:st={max(0.0, duration - 0.45):.3f}:d=0.45")
     graph += f";[vc]{','.join(vf)}[v]"
     fade_out = f"afade=t=out:st={max(0.0, duration - 0.8):.3f}:d=0.8"
@@ -262,6 +313,9 @@ def render_edit(
         "music": plan["music"]["file"] if with_music else None,
         "filters": graphs,
         "effects": sorted(_effects_used(shots, style)),
+        "shot_starts": shot_starts,
+        "title_at": title_at,
+        "quality": plan.get("quality"),
         "ffmpeg": shutil.which(ffmpeg.ffmpeg_bin()) is not None,
         "fps": FPS,
         "size": [OUT_W, OUT_H],
@@ -280,7 +334,11 @@ def _effects_used(shots: list[dict], style: Style) -> set[str]:
         used.add("slow_motion")
     if any(float(s.get("freeze") or 0) > 0 for s in shots):
         used.add("freeze_frame")
-    if style.motion_blur:
+    if any(len((s.get("framing") or {}).get("track") or []) > 1 for s in shots):
+        used.add("action_tracking")
+    if any((s.get("framing") or {}).get("mode") == "fit" for s in shots):
+        used.add("full_frame")
+    if style.motion_blur and any(float(s.get("speed") or 1) >= 1.3 or s.get("ramp") or s.get("transition") == "whip" for s in shots):
         used.add("motion_blur")
     if style.letterbox:
         used.add("letterbox")

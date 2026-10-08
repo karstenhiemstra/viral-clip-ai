@@ -26,7 +26,18 @@ const EFFECT_LABELS: Record<string, string> = {
   motion_blur: "motion blur", slow_motion: "slow motion", speed_ramp: "speed ramp", letterbox: "cinema-balken",
   "transition:flash": "flits", "transition:zoom": "zoom punch", "transition:whip": "whip pan", "transition:glitch": "glitch",
   "transition:dip": "fade", "zoom:in": "zoom in", "zoom:out": "zoom uit", "zoom:punch": "punch-in",
+  action_tracking: "volgt de speler", full_frame: "heel beeld (brede actie)",
 };
+
+function shotQuality(s: EditShot): string {
+  const c = s.checks ?? {};
+  if (c.fallback) return "⚠ geen duidelijke actie (opvulling)";
+  const parts = [c.complete ? "✓ volledige actie" : "⚠ actie niet helemaal compleet"];
+  if (s.framing?.mode === "fit") parts.push("heel beeld");
+  else if (s.framing && s.framing.zoom > 1.01) parts.push(`${s.framing.zoom.toFixed(2)}× dichterbij`);
+  if (s.framing?.track && s.framing.track.length > 1) parts.push("volgt de speler");
+  return parts.join(" · ");
+}
 
 type Sources = { videos: EditSource[]; music: { name: string; size: number }[] };
 
@@ -65,6 +76,7 @@ function ShotEditor({ edit, onSaved }: { edit: AutoEdit; onSaved: (e: AutoEdit) 
   const toast = useToast();
   const [shots, setShots] = useState<EditShot[]>(edit.plan?.shots ?? []);
   const [music, setMusic] = useState(edit.plan?.music_enabled ?? false);
+  const [text, setText] = useState(edit.plan?.text ?? true);
   const [saving, setSaving] = useState(false);
   const titles = Object.fromEntries(edit.sources.map((s) => [s.id, s.title]));
   const set = (i: number, patch: Partial<EditShot>) => setShots((all) => all.map((s, k) => (k === i ? { ...s, ...patch } : s)));
@@ -80,7 +92,7 @@ function ShotEditor({ edit, onSaved }: { edit: AutoEdit; onSaved: (e: AutoEdit) 
   async function save() {
     setSaving(true);
     try {
-      onSaved(await api<AutoEdit>(`/api/edits/${edit.id}/plan`, { method: "PUT", json: { shots, music } }));
+      onSaved(await api<AutoEdit>(`/api/edits/${edit.id}/plan`, { method: "PUT", json: { shots, music, text } }));
       toast("Aanpassingen opgeslagen — de edit wordt opnieuw gerenderd");
     } catch (e) {
       toast(errorText(e), "error");
@@ -92,13 +104,19 @@ function ShotEditor({ edit, onSaved }: { edit: AutoEdit; onSaved: (e: AutoEdit) 
     <Card className="space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm font-semibold">Edit aanpassen <span className="font-normal text-muted">· {shots.length} clips · {total.toFixed(1)} s</span></p>
-        {edit.plan?.music ? <Toggle checked={music} onChange={setMusic} label={`Muziek (${edit.plan.music.file})`} /> : <span className="text-xs text-muted">Geen muziek in deze edit</span>}
+        <div className="flex flex-wrap items-center gap-4">
+          <Toggle checked={text} onChange={setText} label="Naam als tekst (aan het einde)" />
+          {edit.plan?.music ? <Toggle checked={music} onChange={setMusic} label={`Muziek (${edit.plan.music.file})`} /> : <span className="text-xs text-muted">Geen muziek in deze edit</span>}
+        </div>
       </div>
       <div className="space-y-2">
         {shots.map((s, i) => (
           <div key={i} className={`grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 rounded-lg border border-line p-2 text-xs sm:grid-cols-[auto_1.2fr_7.5rem_8rem_auto_auto] ${s.enabled ? "" : "opacity-50"}`}>
             <span className="font-mono text-muted">#{i + 1}</span>
-            <span className="truncate" title={titles[s.video_id]}>{titles[s.video_id] ?? `Video ${s.video_id}`} · {formatDuration(s.start)}</span>
+            <span className="min-w-0" title={titles[s.video_id]}>
+              <span className="block truncate">{titles[s.video_id] ?? `Video ${s.video_id}`} · {formatDuration(s.start)}</span>
+              <span className="block truncate text-[11px] text-muted">{shotQuality(s)}</span>
+            </span>
             <label className="flex items-center gap-1">Duur<Input className="w-20 min-w-20" type="number" step={0.1} min={0.3} max={8} value={s.out} onChange={(e) => set(i, { out: Number(e.target.value) })} />s</label>
             <Select value={s.transition} onChange={(e) => set(i, { transition: e.target.value as EditTransition })}>
               {Object.entries(TRANSITIONS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -158,7 +176,7 @@ function Result({ edit, onChange }: { edit: AutoEdit; onChange: (e: AutoEdit) =>
               <video key={edit.video_url} src={edit.video_url} poster={edit.thumbnail_url ?? undefined} className="size-full" controls playsInline autoPlay muted loop />
             </div>
             <div className="space-y-3 text-sm">
-              <p className="text-muted">{edit.result.duration?.toFixed(1)} s · {edit.result.shots} clips{edit.result.music ? ` · muziek: ${edit.result.music} (${edit.plan?.music?.bpm} BPM, cuts op de beat)` : " · origineel geluid"}</p>
+              <p className="text-muted">{edit.result.duration?.toFixed(1)} s · {edit.result.shots} clips{edit.plan?.quality ? ` (${edit.plan.quality.complete_actions} volledige acties)` : ""}{edit.result.music ? ` · muziek: ${edit.result.music} (${edit.plan?.music?.bpm} BPM, cuts op de beat)` : " · origineel geluid"}</p>
               <div className="flex flex-wrap gap-1">{(edit.result.effects ?? []).map((e) => <Badge key={e}>{EFFECT_LABELS[e] ?? e}</Badge>)}</div>
               <div className="flex flex-wrap gap-2">
                 <Button variant="fire" icon={<RefreshCw className="size-4" />} onClick={regenerate}>Opnieuw genereren</Button>
@@ -183,6 +201,7 @@ function EditInner() {
   const [style, setStyle] = useState("auto");
   const [duration, setDuration] = useState(15);
   const [music, setMusic] = useState(true);
+  const [showName, setShowName] = useState(true);
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
   const [footageTitle, setFootageTitle] = useState("");
@@ -203,7 +222,7 @@ function EditInner() {
     try {
       const e = await api<AutoEdit>("/api/edits", {
         method: "POST",
-        json: { prompt, style, duration, music, video_ids: picking && picked.length ? picked : null },
+        json: { prompt, style, duration, music, text: showName, video_ids: picking && picked.length ? picked : null },
       });
       router.replace(`/edit?id=${e.id}`);
       setCurrent(e, { revalidate: true });
@@ -236,6 +255,7 @@ function EditInner() {
             <Toggle checked={music} onChange={setMusic} label="Muziek gebruiken (cuts op de beat)" />
           </Field>
         </div>
+        <Toggle checked={showName} onChange={setShowName} label="Naam als tekst" hint="Alleen aan het einde van de edit, nooit op het eerste shot — de actie gaat voor" />
         <div className="space-y-2">
           <Toggle checked={picking} onChange={setPicking} label="Kies zelf video's" hint="Anders zoekt de editor video's met de naam in de titel" />
           {picking && (

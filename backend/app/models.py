@@ -25,6 +25,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -399,6 +400,7 @@ class Edit(Base):
     style_auto: Mapped[bool] = mapped_column(Boolean, default=True)
     duration: Mapped[float] = mapped_column(Float, default=15.0)
     music: Mapped[bool] = mapped_column(Boolean, default=True)
+    show_title: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())  # the name, at the end
     seed: Mapped[int] = mapped_column(Integer, default=1)
     version: Mapped[int] = mapped_column(Integer, default=1)  # +1 on every (re)generate / plan change
     source_video_ids: Mapped[list[int]] = mapped_column(JSONType, default=list)

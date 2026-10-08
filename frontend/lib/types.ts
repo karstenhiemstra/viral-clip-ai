@@ -392,6 +392,11 @@ export interface EditShot {
   cx: number;
   score: number;
   enabled: boolean;
+  peak?: number;
+  action?: [number, number];
+  moment?: "slowmo" | "ramp" | "punch" | "shake" | "freeze" | null;
+  checks?: { complete?: boolean; fallback?: boolean; visible?: boolean; in_frame?: number; context_before?: number; context_after?: number };
+  framing?: { mode: "crop" | "fit"; zoom: number; track: [number, number, number][] };
 }
 
 export interface EditPlan {
@@ -404,6 +409,7 @@ export interface EditPlan {
   music: { file: string; start: number; bpm: number } | null;
   text: boolean;
   shots: EditShot[];
+  quality?: { shots: number; complete_actions: number; fallback_shots: number; strong_effects: number };
 }
 
 export interface EditSource {
@@ -422,6 +428,7 @@ export interface AutoEdit {
   style_auto: boolean;
   duration: number;
   music: boolean;
+  text: boolean;
   status: "queued" | "rendering" | "ready" | "failed";
   error: string | null;
   version: number;

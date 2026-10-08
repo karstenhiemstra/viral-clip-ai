@@ -36,6 +36,7 @@ class EditIn(BaseModel):
     style: Literal["auto", "hype", "cinematic", "fast", "clean", "football"] | None = None
     duration: float | None = Field(None, ge=6, le=60)
     music: bool = True
+    text: bool = True  # the name as text, at the end of the edit
     video_ids: list[int] | None = None
 
 
@@ -52,6 +53,14 @@ class ShotIn(BaseModel):
     cx: float = Field(0.5, ge=0, le=1)
     score: float = 0.0
     enabled: bool = True
+    # from the planner (kept when the user changes the edit): the strongest moment, the action, its camera
+    # shot, the effect at the moment, the quality checks and the framing that follows the player
+    peak: float | None = Field(None, ge=0)
+    action: list[float] | None = Field(None, min_length=2, max_length=2)
+    bounds: list[float] | None = Field(None, min_length=2, max_length=2)
+    moment: Literal["slowmo", "ramp", "punch", "shake", "freeze"] | None = None
+    checks: dict[str, bool | int | float] | None = None
+    framing: dict | None = None
 
 
 class PlanIn(BaseModel):
@@ -85,6 +94,7 @@ def edit_out(db: Session, e: Edit) -> dict:
         "style_auto": e.style_auto,
         "duration": e.duration,
         "music": e.music,
+        "text": e.show_title,
         "status": e.status,
         "error": e.error,
         "version": e.version,
@@ -139,7 +149,7 @@ def create_edit(body: EditIn, db: Session = Depends(get_db)):
             raise HTTPException(status_code=422, detail="Over wie of wat moet de edit gaan? Bijvoorbeeld: 'Maak een edit van Neymar'.")
         raise HTTPException(status_code=422, detail=no_footage_message(req.subject, bool(available_videos(db))))
     e = Edit(prompt=req.prompt, subject=req.subject or (videos[0].title or "")[:60], style=req.style,
-             style_auto=not req.style_explicit, duration=req.duration, music=body.music,
+             style_auto=not req.style_explicit, duration=req.duration, music=body.music, show_title=body.text,
              seed=random.randint(1, 2**31 - 1), source_video_ids=[v.id for v in videos][:12], status=EditStatus.QUEUED)
     db.add(e)
     db.flush()
@@ -179,7 +189,7 @@ def update_plan(edit_id: int, body: PlanIn, db: Session = Depends(get_db)):
         e.music = body.music
         plan["music_enabled"] = bool(body.music and plan.get("music"))
     if body.text is not None:
-        plan["text"] = body.text
+        plan["text"] = e.show_title = body.text
     try:
         e.plan = validate_plan(plan, durations)
     except ValueError as err:
