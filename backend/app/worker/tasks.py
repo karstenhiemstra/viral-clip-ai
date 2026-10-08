@@ -347,11 +347,18 @@ def handle_train_model(ctx: JobContext) -> str:
         return f"Persoonlijk model v{model.version} getraind op {model.n_samples} clips"
 
 
+def handle_render_edit(ctx: JobContext) -> str:
+    from app.edit.service import run_edit_job  # local tools only: ffmpeg + numpy, no AI service
+
+    return run_edit_job(ctx)
+
+
 HANDLERS = {
     JobType.SCAN_CREATOR: handle_scan_creator,
     JobType.ANALYZE_VIDEO: handle_analyze_video,
     JobType.RENDER_CLIP: handle_render_clip,
     JobType.TRAIN_MODEL: handle_train_model,
     JobType.IMPORT_MEDIA: handle_import_media,
+    JobType.RENDER_EDIT: handle_render_edit,
 }
 

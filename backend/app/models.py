@@ -80,6 +80,14 @@ class JobType:
     RENDER_CLIP = "render_clip"
     TRAIN_MODEL = "train_model"
     IMPORT_MEDIA = "import_media"
+    RENDER_EDIT = "render_edit"
+
+
+class EditStatus:
+    QUEUED = "queued"
+    RENDERING = "rendering"
+    READY = "ready"
+    FAILED = "failed"
 
 
 class Rating:
@@ -377,3 +385,29 @@ class ScoringModel(Base):
     insights: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Edit(Base):
+    """An Auto Edit: a short edit made locally (ffmpeg) from a prompt and the user's own footage."""
+
+    __tablename__ = "edits"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    subject: Mapped[str] = mapped_column(String(200), default="")
+    style: Mapped[str] = mapped_column(String(24), default="hype")
+    style_auto: Mapped[bool] = mapped_column(Boolean, default=True)
+    duration: Mapped[float] = mapped_column(Float, default=15.0)
+    music: Mapped[bool] = mapped_column(Boolean, default=True)
+    seed: Mapped[int] = mapped_column(Integer, default=1)
+    version: Mapped[int] = mapped_column(Integer, default=1)  # +1 on every (re)generate / plan change
+    source_video_ids: Mapped[list[int]] = mapped_column(JSONType, default=list)
+    plan: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
+    status: Mapped[str] = mapped_column(String(16), default=EditStatus.QUEUED, index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    job_id: Mapped[int | None] = mapped_column(Integer)
+    render_key: Mapped[str | None] = mapped_column(String(500))
+    thumbnail_key: Mapped[str | None] = mapped_column(String(500))
+    render_meta: Mapped[dict[str, Any]] = mapped_column(JSONType, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)

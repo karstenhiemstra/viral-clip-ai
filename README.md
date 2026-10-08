@@ -15,6 +15,7 @@ Je voegt creators toe (bijv. Enzo Knol, Bankzitters, Hanwe, Gio, StukTV — of e
 - [Waarom moet ik de video zelf aanleveren?](#waarom-moet-ik-de-video-zelf-aanleveren)
 - [Hoe kiest de app de clips? (eerlijk: wat is AI en wat niet)](#hoe-kiest-de-app-de-clips)
 - [Wat kost het?](#wat-kost-het)
+- [Auto Edit — gratis edits met één zin](#auto-edit--gratis-edits-met-één-zin)
 - [Automatisch volgen van creators](#automatisch-volgen-van-creators)
 - [Beveiliging](#beveiliging)
 - [Voor ontwikkelaars](#voor-ontwikkelaars) — architectuur, lokaal draaien, tests, database, deployment
@@ -199,6 +200,19 @@ Ter vergelijking, alleen Claude (transcriptie lokaal, gratis): Gebalanceerd $0,1
 De werkelijke kosten worden per analyse bijgehouden (videopagina → *Laatste analyse*) en per dag op het dashboard. **Settings → AI & modellen** toont dezelfde tabel voor jouw instellingen.
 
 **Besparen:** kwaliteit *Budget*, minder kandidaten (Settings → Pipeline), minimale videolengte per creator, maximaal aantal video's per scan, ondertitels aanleveren.
+
+---
+
+## Auto Edit — gratis edits met één zin
+
+Typ op de pagina **Auto Edit** bijvoorbeeld *"Maak een edit van Neymar"* of *"Maak een cinematic edit van Messi"* en klik **Maak edit**. De edit wordt **volledig lokaal** gemaakt met FFmpeg: geen OpenAI/Claude, geen transcriptie, geen kosten.
+
+1. **Beeldmateriaal:** voeg video's toe via *Beeldmateriaal toevoegen* (op die pagina; er start dan géén clip-analyse) of gebruik video's die al in de app staan. Zet de naam in de titel ("Neymar skills"), of kies zelf de video's onder *Kies zelf video's*. De editor zoekt niets op internet.
+2. **Muziek (optioneel):** voeg een nummer toe via *Muziek toevoegen* of zet audiobestanden in `data/music`. De cuts vallen dan op de beat. Zonder muziek gebruikt de edit het originele geluid. Gebruik alleen muziek die je mag gebruiken.
+3. **Stijlen:** Hype, Cinematic, Fast / Aggressive, Clean en Football Edit. Noem je geen stijl, dan kiest de editor zelf (voetballers → Football Edit, anders Hype).
+4. **Resultaat:** een preview (1080×1920 MP4, standaard 15 s), met **Opnieuw genereren** (andere momenten, timing en effecten), **Download** en **Edit aanpassen** (volgorde, verwijderen, inkorten, transitie, zoom/shake/slow-mo/freeze, muziek aan/uit).
+
+Hoe het werkt: de beelden worden geanalyseerd op beweging, cameracuts, waar de actie in beeld is en hoe hard het geluid is (eenmalig, daarna uit de cache). De beste momenten komen aan het begin en het einde. Effecten: snelle cuts op de beat, zoom in/uit, punch-in, camera shake, speed ramps, slow motion (met frame blending), motion blur, flits-, zoom-, whip-, glitch- en fade-transities, freeze frames, kleurgrading per stijl, cinema-balken (Cinematic), fade in/uit en de naam als titel.
 
 ---
 

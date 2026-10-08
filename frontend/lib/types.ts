@@ -374,3 +374,65 @@ export interface SettingsPayload {
     secret_names: string[];
   };
 }
+
+// --- Auto Edit ---------------------------------------------------------------------------------------
+export type EditStyle = "hype" | "cinematic" | "fast" | "clean" | "football";
+export type EditTransition = "cut" | "flash" | "zoom" | "whip" | "glitch" | "dip";
+
+export interface EditShot {
+  video_id: number;
+  start: number;
+  out: number;
+  speed: number;
+  ramp: boolean;
+  freeze: number;
+  transition: EditTransition;
+  zoom: "in" | "out" | "punch" | null;
+  shake: boolean;
+  cx: number;
+  score: number;
+  enabled: boolean;
+}
+
+export interface EditPlan {
+  style: EditStyle;
+  subject: string;
+  title: string;
+  duration: number;
+  seed: number;
+  music_enabled: boolean;
+  music: { file: string; start: number; bpm: number } | null;
+  text: boolean;
+  shots: EditShot[];
+}
+
+export interface EditSource {
+  id: number;
+  title: string;
+  duration: number | null;
+  thumbnail_url: string | null;
+}
+
+export interface AutoEdit {
+  id: number;
+  prompt: string;
+  subject: string;
+  style: EditStyle;
+  style_label: string;
+  style_auto: boolean;
+  duration: number;
+  music: boolean;
+  status: "queued" | "rendering" | "ready" | "failed";
+  error: string | null;
+  version: number;
+  progress: number;
+  stage: string | null;
+  video_url: string | null;
+  thumbnail_url: string | null;
+  download_url: string | null;
+  plan: EditPlan | null;
+  sources: EditSource[];
+  result: { duration: number | null; shots: number | null; effects: string[] | null; music: string | null; style: string | null };
+  created_at: string | null;
+  updated_at: string | null;
+}

@@ -9,7 +9,7 @@ from app.services.storage import get_storage
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
-ALLOWED_PREFIXES = ("clips/", "videos/")
+ALLOWED_PREFIXES = ("clips/", "videos/", "edits/")
 
 
 @router.get("/{key:path}")

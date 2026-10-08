@@ -12,7 +12,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import clips, creators, insights, jobs, media, settings, videos
+from app.api import clips, creators, edits, insights, jobs, media, settings, videos
 from app.api.deps import require_auth
 from app.config import get_settings
 from app.video import ffmpeg
@@ -54,7 +54,7 @@ def create_app() -> FastAPI:
         return {"ok": True, "version": __version__, "ffmpeg": ffmpeg.available()}
 
     protected = [Depends(require_auth)]
-    for module in (creators, videos, jobs, clips, insights, settings, media):
+    for module in (creators, videos, jobs, clips, edits, insights, settings, media):
         app.include_router(module.router, dependencies=protected)
     return app
 

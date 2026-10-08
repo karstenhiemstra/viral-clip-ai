@@ -108,11 +108,16 @@ class Settings(BaseSettings):
         return self.data_dir / "tmp"
 
     @property
+    def music_dir(self) -> Path:
+        """Music for the Auto Edit: files the user put here (or uploaded on the Auto Edit page)."""
+        return self.data_dir / "music"
+
+    @property
     def is_sqlite(self) -> bool:
         return self.database_url.startswith("sqlite")
 
     def ensure_dirs(self) -> None:
-        for d in (self.data_dir, self.storage_dir, self.inbox_dir, self.tmp_dir, self.face_model_path.parent):
+        for d in (self.data_dir, self.storage_dir, self.inbox_dir, self.tmp_dir, self.music_dir, self.face_model_path.parent):
             d.mkdir(parents=True, exist_ok=True)
 
 

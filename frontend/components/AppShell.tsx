@@ -1,6 +1,6 @@
 "use client";
 
-import { ChartColumn, Film, Flame, LayoutDashboard, ListOrdered, Menu, Scissors, Settings, Users, X } from "lucide-react";
+import { ChartColumn, Film, Flame, LayoutDashboard, ListOrdered, Menu, Scissors, Settings, Users, Wand2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode, useState } from "react";
@@ -14,6 +14,7 @@ const NAV = [
   { href: "/videos", label: "Videos", icon: Film },
   { href: "/queue", label: "Analysis Queue", icon: ListOrdered, badge: "queue" as const },
   { href: "/clips", label: "Clips", icon: Scissors },
+  { href: "/edit", label: "Auto Edit", icon: Wand2 },
   { href: "/analytics", label: "Analytics", icon: ChartColumn },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
